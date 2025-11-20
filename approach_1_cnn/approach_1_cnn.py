@@ -9,6 +9,12 @@ Division Engineering of Adaptive Systems, Dresden, Germany
 This Python script is converted from the Jupyter Notebook that is part of a paper
 submission to the 25th IEEE International Conference on Emerging Technologies and
 Factory Automation, ETFA 2020.
+
+Modified to:
+1. Train only the most accurate 3-layer CNN model
+2. Process evaluation data as timeseries with 1-minute windows
+3. Detect unbalance anomalies in real-time
+4. Generate and save figures for detected unbalances
 """
 
 import pandas as pd
@@ -19,6 +25,8 @@ import zipfile
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 import os
+import argparse
+import time
 from sklearn.model_selection import train_test_split
 from scipy.stats import mode
 
@@ -28,6 +36,7 @@ from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, Flatten, ReLU
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import ModelCheckpoint
 from tensorflow.keras.regularizers import l1_l2
+from datetime import datetime, timedelta
 
 
 # Configuration
@@ -37,23 +46,38 @@ SAMPLES_PER_SECOND = 4096
 SECONDS_PER_ANALYSIS = 1.0
 WINDOW = int(SAMPLES_PER_SECOND * SECONDS_PER_ANALYSIS)
 SKIP = 50000  # Skip warm-up phase
+N_CONV_LAYERS = 3  # Use the most accurate 3-layer CNN model
+MINUTE_WINDOW = 60 * SAMPLES_PER_SECOND  # 1 minute of data
+UNBALANCE_THRESHOLD = 0.5  # Prediction threshold for unbalance detection
 
 
-def load_data(url):
+def load_data(url, datasets_to_load='all'):
     """
     Load measurement data from ZIP file.
 
     Args:
         url: Path to the ZIP file containing the dataset
+        datasets_to_load: Which datasets to load - 'all', 'eval_only', or specific like '4E'
 
     Returns:
-        Dictionary containing all datasets (0D-4D, 0E-4E)
+        Dictionary containing requested datasets
     """
     print("Loading measurement data...")
     data = {}
 
+    # Determine which datasets to load
+    if datasets_to_load.upper() == 'ALL':
+        # Load all evaluation datasets for validation and processing
+        labels_to_load = ['0E', '1E', '2E', '3E', '4E']
+    elif datasets_to_load.upper() in ['0E', '1E', '2E', '3E', '4E']:
+        # Load only the specific evaluation dataset requested
+        labels_to_load = [datasets_to_load.upper()]
+    else:
+        # Default: load all evaluation datasets
+        labels_to_load = ['0E', '1E', '2E', '3E', '4E']
+
     with zipfile.ZipFile(url, 'r') as f:
-        for label in ['0D', '0E', '1D', '1E', '2D', '2E', '3D', '3E', '4D', '4E']:
+        for label in labels_to_load:
             with f.open(f'{label}.csv', 'r') as c:
                 data[label] = pd.read_csv(c)
                 print(f"  Loaded {label}.csv: {len(data[label])} rows")
@@ -102,52 +126,39 @@ def get_features(data, label):
 
 def prepare_datasets(data):
     """
-    Prepare training and validation datasets.
+    Prepare validation datasets from loaded evaluation data.
 
     Args:
-        data: Dictionary of dataframes with all datasets
+        data: Dictionary of dataframes with evaluation datasets (0E-4E)
 
     Returns:
-        Tuple of (X, y, X_val, y_val, X_val_separated, y_val_separated)
+        Tuple of (X_val, y_val) - combined validation features and labels
     """
-    print("\nPreparing datasets...")
+    print("\nPreparing validation datasets...")
 
-    # Training data (D datasets)
-    X0, y0 = get_features(data['0D'][SENSOR], "no_unbalance")
-    X1, y1 = get_features(data['1D'][SENSOR], "unbalance")
-    X2, y2 = get_features(data['2D'][SENSOR], "unbalance")
-    X3, y3 = get_features(data['3D'][SENSOR], "unbalance")
-    X4, y4 = get_features(data['4D'][SENSOR], "unbalance")
-    X = np.concatenate([X0, X1, X2, X3, X4])
-    y = np.concatenate([y0, y1, y2, y3, y4])
+    # Only prepare the datasets that were loaded
+    X_vals = []
+    y_vals = []
 
-    # Validation data (E datasets)
-    X0_val, y0_val = get_features(data['0E'][SENSOR], "no_unbalance")
-    X1_val, y1_val = get_features(data['1E'][SENSOR], "unbalance")
-    X2_val, y2_val = get_features(data['2E'][SENSOR], "unbalance")
-    X3_val, y3_val = get_features(data['3E'][SENSOR], "unbalance")
-    X4_val, y4_val = get_features(data['4E'][SENSOR], "unbalance")
-    X_val = np.concatenate([X0_val, X1_val, X2_val, X3_val, X4_val])
-    y_val = np.concatenate([y0_val, y1_val, y2_val, y3_val, y4_val])
+    for label in ['0E', '1E', '2E', '3E', '4E']:
+        if label in data:
+            label_type = "no_unbalance" if label == '0E' else "unbalance"
+            X, y = get_features(data[label][SENSOR], label_type)
+            X_vals.append(X)
+            y_vals.append(y)
+            print(f"  {label}: {X.shape[0]} samples")
 
-    # Separated validation data for per-dataset evaluation
-    X_val_separated = [
-        X_val[:len(y0_val), :],
-        X_val[len(y0_val):len(y0_val)+len(y1_val), :],
-        X_val[len(y0_val)+len(y1_val):len(y0_val)+len(y1_val)+len(y2_val), :],
-        X_val[len(y0_val)+len(y1_val)+len(y2_val):len(y0_val)+len(y1_val)+len(y2_val)+len(y3_val), :],
-        X_val[len(y0_val)+len(y1_val)+len(y2_val)+len(y3_val):, :]
-    ]
-    y_val_separated = [y0_val, y1_val, y2_val, y3_val, y4_val]
+    # Concatenate all loaded datasets for overall validation
+    if len(X_vals) > 0:
+        X_val = np.concatenate(X_vals)
+        y_val = np.concatenate(y_vals)
+        print(f"\n  Combined validation shape: {X_val.shape}, labels: {y_val.shape}")
+    else:
+        # If no data loaded, return empty arrays
+        X_val = np.array([])
+        y_val = np.array([])
 
-    # Also keep development sets for pairwise training
-    X_dev = [X0, X1, X2, X3, X4]
-    y_dev = [y0, y1, y2, y3, y4]
-
-    print(f"  Training data shape: {X.shape}, labels: {y.shape}")
-    print(f"  Validation data shape: {X_val.shape}, labels: {y_val.shape}")
-
-    return X, y, X_val, y_val, X_val_separated, y_val_separated, X_dev, y_dev
+    return X_val, y_val
 
 
 def create_cnn_model(n_conv_layers, input_shape):
@@ -190,21 +201,22 @@ def create_cnn_model(n_conv_layers, input_shape):
     return classifier
 
 
-def train_models(X, y, model_path, use_reference_models=True):
+def train_model(X, y, model_path, n_conv_layers=3):
     """
-    Train CNN models with different numbers of layers.
+    Train the 3-layer CNN model (most accurate configuration).
 
     Args:
         X: Training features
         y: Training labels
-        model_path: Path to save/load models
-        use_reference_models: If True, use pre-trained models instead of training
-    """
-    if use_reference_models:
-        print("\nUsing reference models (skipping training)")
-        return
+        model_path: Path to save model
+        n_conv_layers: Number of convolutional layers (default: 3)
 
-    print("\nTraining models with different layer configurations...")
+    Returns:
+        Path to the trained model
+    """
+    print(f"\n{'='*80}")
+    print(f"Training {n_conv_layers}-layer CNN model (most accurate configuration)")
+    print(f"{'='*80}")
 
     # Calculate class weights
     weight_for_0 = len(y) / (2 * len(y[y == 0]))
@@ -216,45 +228,53 @@ def train_models(X, y, model_path, use_reference_models=True):
     learning_rate = 0.0001
     n_epochs = 100
 
-    for n_conv_layers in range(1, 5):
-        print(f"\n--- Training model with {n_conv_layers} convolutional layer(s) ---")
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=1-train_test_ratio, random_state=0)
+    X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
+    X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
 
-        # Train-test split
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=1-train_test_ratio, random_state=0)
-        X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
-        X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+    print(f"\nTraining set: {X_train.shape[0]} samples")
+    print(f"Test set: {X_test.shape[0]} samples")
+    print(f"Class weights: no_unbalance={weight_for_0:.3f}, unbalance={weight_for_1:.3f}")
 
-        # Create model
-        classifier = create_cnn_model(n_conv_layers, (X_train.shape[1], 1))
-        classifier.summary()
+    # Create model
+    classifier = create_cnn_model(n_conv_layers, (X_train.shape[1], 1))
+    classifier.summary()
 
-        # Compile
-        classifier.compile(
-            optimizer=Adam(lr=learning_rate),
-            loss='binary_crossentropy',
-            metrics=['accuracy']
-        )
+    # Compile
+    classifier.compile(
+        optimizer=Adam(lr=learning_rate),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
 
-        # Setup checkpoint
-        best_model_filepath = f"{model_path}/cnn_{n_conv_layers}_layers.h5"
-        checkpoint = ModelCheckpoint(
-            best_model_filepath,
-            monitor='val_loss',
-            verbose=1,
-            save_best_only=True,
-            mode='min'
-        )
+    # Setup checkpoint
+    best_model_filepath = f"{model_path}/cnn_{n_conv_layers}_layers.h5"
+    checkpoint = ModelCheckpoint(
+        best_model_filepath,
+        monitor='val_loss',
+        verbose=1,
+        save_best_only=True,
+        mode='min'
+    )
 
-        # Train
-        classifier.fit(
-            X_train, y_train,
-            epochs=n_epochs,
-            batch_size=64,
-            validation_data=(X_test, y_test),
-            callbacks=[checkpoint],
-            class_weight=class_weight
-        )
+    # Train
+    print(f"\nTraining for {n_epochs} epochs...")
+    classifier.fit(
+        X_train, y_train,
+        epochs=n_epochs,
+        batch_size=64,
+        validation_data=(X_test, y_test),
+        callbacks=[checkpoint],
+        class_weight=class_weight
+    )
+
+    print(f"\n{'='*80}")
+    print(f"Model saved to: {best_model_filepath}")
+    print(f"{'='*80}")
+
+    return best_model_filepath
 
 
 def evaluate_models(X_val_separated, y_val_separated, X_val, y_val, model_path):
@@ -362,114 +382,476 @@ def evaluate_rotation_speed_dependency(X_val, y_val, model_path):
     return rpm_borders, errors_per_rpm_range
 
 
-def plot_results(accuracies, accuracies_all, rpm_borders, errors_per_rpm_range,
-                output_dir='../../figures'):
+def process_with_weighted_sampling(model, data, output_dir, speed):
     """
-    Plot evaluation results.
+    Process data with weighted random sampling.
+    75% weight on 0E (no unbalance), 25% on 1E-4E (random unbalanced).
 
     Args:
-        accuracies: Per-dataset accuracies
-        accuracies_all: Overall accuracies
-        rpm_borders: RPM range boundaries
-        errors_per_rpm_range: Accuracies per RPM range
-        output_dir: Directory to save figures
+        model: Trained CNN model
+        data: Dictionary of evaluation datasets
+        output_dir: Directory to save detection figures
+        speed: Processing speed multiplier
     """
-    print("\nPlotting results...")
+    total_detections = 0
+    start_time = datetime(2020, 1, 1, 0, 0, 0)
+    processing_start = time.time()
+
+    # Calculate how many minutes we can process from each dataset
+    dataset_minutes = {}
+    for label in ['0E', '1E', '2E', '3E', '4E']:
+        if label in data:
+            total_samples = len(data[label][SENSOR].values)
+            n_minutes = int(np.floor(total_samples / MINUTE_WINDOW))
+            dataset_minutes[label] = n_minutes
+            print(f"{label}: {n_minutes} minutes available")
+
+    if not dataset_minutes:
+        print("No data available to process")
+        return
+
+    # Determine total number of minutes to process (use the maximum available)
+    max_minutes = max(dataset_minutes.values())
+    print(f"\nProcessing {max_minutes} minutes with weighted random sampling...")
+    print()
+
+    # Track stats
+    dataset_selection_counts = {label: 0 for label in ['0E', '1E', '2E', '3E', '4E']}
+
+    # Keep track of current position in each dataset
+    dataset_positions = {label: 0 for label in dataset_minutes.keys()}
+
+    for minute_idx in range(max_minutes):
+        minute_process_start = time.time()
+
+        # Weighted random selection
+        # 75% chance of selecting 0E, 25% chance of selecting from 1E-4E
+        rand_val = np.random.random()
+
+        if rand_val < 0.75 and '0E' in data and dataset_positions['0E'] < dataset_minutes['0E']:
+            # Select 0E (no unbalance)
+            selected_label = '0E'
+            selected_name = 'No Unbalance'
+        else:
+            # Select randomly from 1E-4E (unbalanced datasets)
+            unbalanced_labels = [label for label in ['1E', '2E', '3E', '4E']
+                                if label in data and dataset_positions[label] < dataset_minutes[label]]
+            if not unbalanced_labels:
+                # If no unbalanced data available, try 0E
+                if '0E' in data and dataset_positions['0E'] < dataset_minutes['0E']:
+                    selected_label = '0E'
+                    selected_name = 'No Unbalance'
+                else:
+                    # No data left to process
+                    break
+            else:
+                selected_label = np.random.choice(unbalanced_labels)
+                level = ['1E', '2E', '3E', '4E'].index(selected_label) + 1
+                selected_name = f'Unbalance Level {level}'
+
+        # Track selection
+        dataset_selection_counts[selected_label] += 1
+
+        # Get the current minute from the selected dataset
+        current_pos = dataset_positions[selected_label]
+        sensor_data = data[selected_label][SENSOR].values
+
+        start_idx = current_pos * MINUTE_WINDOW
+        end_idx = start_idx + MINUTE_WINDOW
+        minute_data = sensor_data[start_idx:end_idx]
+
+        # Move to next minute in this dataset
+        dataset_positions[selected_label] += 1
+
+        # Split into 1-second windows (60 windows per minute)
+        n_windows = int(np.floor(len(minute_data) / WINDOW))
+        minute_data_windowed = minute_data[:n_windows * WINDOW].reshape((n_windows, WINDOW, 1))
+
+        # Predict on all windows in this minute
+        predictions = model.predict(minute_data_windowed, verbose=0)
+        predictions_binary = (predictions > UNBALANCE_THRESHOLD).astype(int).flatten()
+
+        # Check if unbalance detected (majority voting)
+        unbalance_detections = np.sum(predictions_binary)
+        detection_ratio = unbalance_detections / len(predictions_binary)
+
+        # Calculate timestamp
+        current_time = start_time + timedelta(seconds=minute_idx * 60)
+        timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
+
+        # If significant unbalance detected (>50% of windows), save figure
+        if detection_ratio > 0.5:
+            total_detections += 1
+
+            print(f"\n  ⚠️  UNBALANCE DETECTED at minute {minute_idx + 1}")
+            print(f"      Source: {selected_label} ({selected_name})")
+            print(f"      Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"      Row index: {start_idx:,} - {end_idx:,}")
+            print(f"      Detection ratio: {detection_ratio*100:.1f}%")
+            print(f"      Mean prediction: {np.mean(predictions):.4f}")
+
+            # Generate and save figure
+            fig = plt.figure(figsize=(15, 10))
+
+            # Plot 1: Full minute timeseries
+            ax1 = plt.subplot(3, 1, 1)
+            time_axis = np.arange(len(minute_data)) / SAMPLES_PER_SECOND
+            ax1.plot(time_axis, minute_data, lw=0.5)
+            ax1.set_title(f"UNBALANCE DETECTED - Dataset {selected_label} ({selected_name})\n"
+                         f"Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} | "
+                         f"Rows: {start_idx:,}-{end_idx:,}", fontsize=14, fontweight='bold')
+            ax1.set_xlabel("Time (seconds)")
+            ax1.set_ylabel("Vibration Amplitude")
+            ax1.grid(True, alpha=0.3)
+
+            # Plot 2: Predictions over time
+            ax2 = plt.subplot(3, 1, 2)
+            window_times = np.arange(len(predictions))
+            ax2.plot(window_times, predictions, marker='o', markersize=3, linewidth=1)
+            ax2.axhline(y=UNBALANCE_THRESHOLD, color='r', linestyle='--',
+                       label=f'Threshold ({UNBALANCE_THRESHOLD})')
+            ax2.fill_between(window_times, 0, 1, where=(predictions.flatten() > UNBALANCE_THRESHOLD),
+                            alpha=0.3, color='red', label='Unbalance Detected')
+            ax2.set_title(f"Predictions per Second (Detection Ratio: {detection_ratio*100:.1f}%)")
+            ax2.set_xlabel("Second")
+            ax2.set_ylabel("Prediction Score")
+            ax2.set_ylim([-0.05, 1.05])
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+
+            # Plot 3: Sample window with highest prediction
+            ax3 = plt.subplot(3, 1, 3)
+            max_pred_idx = np.argmax(predictions)
+            sample_start = max_pred_idx * WINDOW
+            sample_end = sample_start + WINDOW
+            sample_data = minute_data[sample_start:sample_end]
+            sample_time = np.arange(len(sample_data)) / SAMPLES_PER_SECOND
+            ax3.plot(sample_time, sample_data, lw=0.8)
+            ax3.set_title(f"Highest Prediction Window (Prediction: {predictions[max_pred_idx][0]:.4f})")
+            ax3.set_xlabel("Time (seconds)")
+            ax3.set_ylabel("Vibration Amplitude")
+            ax3.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+
+            # Save figure
+            filename = f"unbalance_detection_{selected_label}_{timestamp_str}_minute{minute_idx}_row{start_idx}.png"
+            output_path = os.path.join(output_dir, filename)
+            fig.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+            print(f"      Figure saved: {output_path}")
+
+        # Simulate real-time processing speed if requested
+        if speed > 0:
+            minute_process_time = time.time() - minute_process_start
+            target_time = 60.0 / speed  # 60 seconds for 1x speed
+            sleep_time = target_time - minute_process_time
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    # Print processing summary
+    total_processing_time = time.time() - processing_start
+    print(f"\n{'='*80}")
+    print(f"Weighted Random Sampling Complete")
+    print(f"Total minutes processed: {minute_idx + 1}")
+    print(f"Total unbalance detections: {total_detections}")
+    print(f"\nDataset Selection Statistics:")
+    for label in ['0E', '1E', '2E', '3E', '4E']:
+        if label in dataset_selection_counts and dataset_selection_counts[label] > 0:
+            percentage = (dataset_selection_counts[label] / (minute_idx + 1)) * 100
+            print(f"  {label}: {dataset_selection_counts[label]} times ({percentage:.1f}%)")
+    print(f"\nTotal processing time: {total_processing_time:.2f} seconds")
+    if speed > 0:
+        print(f"Average speed: {speed:.2f}x real-time")
+    print(f"Detection figures saved to: {output_dir}")
+    print(f"{'='*80}")
+
+
+def process_timeseries_data(model, data, output_dir='../../figures/detections',
+                           datasets='all', speed=1.0):
+    """
+    Process evaluation data as timeseries with 1-minute windows.
+    Detect unbalance anomalies and save figures for detections.
+
+    Args:
+        model: Trained CNN model
+        data: Dictionary of evaluation datasets (0E-4E)
+        output_dir: Directory to save detection figures
+        datasets: Which dataset(s) to process - 'all', '0E', '1E', '2E', '3E', or '4E'
+        speed: Processing speed multiplier (1.0 = real-time, 0 = max speed)
+    """
+    print(f"\n{'='*80}")
+    print("Processing Evaluation Data as Timeseries")
+    print(f"{'='*80}")
+
     os.makedirs(output_dir, exist_ok=True)
 
-    unbalances = np.array([0, 4.59e-5, 6.07e-5, 7.55e-5, 1.521e-4])
+    # Determine which datasets to process
+    all_labels = ['0E', '1E', '2E', '3E', '4E']
+    all_names = ['No Unbalance', 'Unbalance Level 1', 'Unbalance Level 2',
+                 'Unbalance Level 3', 'Unbalance Level 4']
 
-    # Plot 1: Unbalance classification
-    fig = plt.figure(figsize=(12, 8))
-    ax1 = plt.subplot(111, title="Unbalance Classification Trained with all Unbalances")
-    for i in range(4):
-        ax1.plot(1e6 * unbalances, accuracies[i, :],
-                label=f"{i+1} conv. layer(s), mean: {100.0*accuracies_all[i]:.1f}%",
-                marker="+", ls="--")
-    plt.ylabel("Accuracy on Evaluation Dataset")
-    plt.xlabel("Unbalance Factor [mm g]")
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
-    plt.ylim([0.45, 1.05])
-    plt.grid(True)
-    plt.tight_layout()
-    output_path = os.path.join(output_dir, "Fig.5a_cnn_unbalance.png")
-    fig.savefig(output_path, dpi=200)
-    print(f"  Saved to {output_path}")
-    plt.close()
+    if datasets.upper() == 'ALL':
+        # When processing ALL datasets, use weighted random sampling
+        print("Mode: Weighted Random Sampling")
+        print("  75% weight on 0E (no unbalance)")
+        print("  25% weight on 1E-4E (unbalanced, randomly selected)")
+        print()
 
-    # Plot 2: Rotation speed dependency
-    fig = plt.figure(figsize=(12, 8))
-    ax2 = plt.subplot(111, title="Rotation Speed Dependent Evaluation")
-    for i in range(4):
-        ax2.plot(np.array(rpm_borders[:-1]) + 25, errors_per_rpm_range[i],
-                marker="+", ls="--", label=f"{i+1} conv. layer(s)")
-    plt.ylabel("Accuracy on Evaluation Dataset")
-    plt.xlabel("Rotation Speed [rpm]")
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
-    plt.ylim([0.45, 1.05])
-    plt.grid(True)
-    plt.tight_layout()
-    output_path = os.path.join(output_dir, "Fig.5b_cnn_rpm.png")
-    fig.savefig(output_path, dpi=200)
-    print(f"  Saved to {output_path}")
-    plt.close()
+        process_with_weighted_sampling(model, data, output_dir, speed)
+        return
+    else:
+        # Process single dataset sequentially
+        dataset_upper = datasets.upper()
+        if dataset_upper not in all_labels:
+            print(f"Error: Invalid dataset '{datasets}'. Must be one of: {', '.join(all_labels)} or 'all'")
+            return
+        idx = all_labels.index(dataset_upper)
+        dataset_labels = [all_labels[idx]]
+        dataset_names = [all_names[idx]]
+
+    # Display processing configuration
+    print(f"Dataset(s): {', '.join(dataset_labels)}")
+    if speed == 0:
+        print(f"Speed: Maximum (no delays)")
+    elif speed == 1.0:
+        print(f"Speed: Real-time (1 minute data = 60 seconds processing)")
+    else:
+        print(f"Speed: {speed}x real-time")
+    print()
+
+    total_detections = 0
+    start_time = datetime(2020, 1, 1, 0, 0, 0)  # Reference start time
+    processing_start = time.time()
+
+    for dataset_label, dataset_name in zip(dataset_labels, dataset_names):
+        print(f"\n--- Processing Dataset {dataset_label}: {dataset_name} ---")
+
+        sensor_data = data[dataset_label][SENSOR].values
+        total_samples = len(sensor_data)
+
+        print(f"Total samples: {total_samples:,}")
+        print(f"Duration: {total_samples / SAMPLES_PER_SECOND / 60:.2f} minutes")
+        print(f"Processing in 1-minute windows ({MINUTE_WINDOW:,} samples each)...")
+
+        # Process in 1-minute chunks
+        n_minutes = int(np.floor(total_samples / MINUTE_WINDOW))
+
+        for minute_idx in range(n_minutes):
+            minute_process_start = time.time()
+
+            # Extract 1 minute of data
+            start_idx = minute_idx * MINUTE_WINDOW
+            end_idx = start_idx + MINUTE_WINDOW
+            minute_data = sensor_data[start_idx:end_idx]
+
+            # Split into 1-second windows (60 windows per minute)
+            n_windows = int(np.floor(len(minute_data) / WINDOW))
+            minute_data_windowed = minute_data[:n_windows * WINDOW].reshape((n_windows, WINDOW, 1))
+
+            # Predict on all windows in this minute
+            predictions = model.predict(minute_data_windowed, verbose=0)
+            predictions_binary = (predictions > UNBALANCE_THRESHOLD).astype(int).flatten()
+
+            # Check if unbalance detected (majority voting)
+            unbalance_detections = np.sum(predictions_binary)
+            detection_ratio = unbalance_detections / len(predictions_binary)
+
+            # Calculate timestamp
+            current_time = start_time + timedelta(seconds=minute_idx * 60)
+            timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
+
+            # If significant unbalance detected (>50% of windows), save figure
+            if detection_ratio > 0.5:
+                total_detections += 1
+
+                print(f"\n  ⚠️  UNBALANCE DETECTED at minute {minute_idx + 1}")
+                print(f"      Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"      Row index: {start_idx:,} - {end_idx:,}")
+                print(f"      Detection ratio: {detection_ratio*100:.1f}%")
+                print(f"      Mean prediction: {np.mean(predictions):.4f}")
+
+                # Generate and save figure
+                fig = plt.figure(figsize=(15, 10))
+
+                # Plot 1: Full minute timeseries
+                ax1 = plt.subplot(3, 1, 1)
+                time_axis = np.arange(len(minute_data)) / SAMPLES_PER_SECOND
+                ax1.plot(time_axis, minute_data, lw=0.5)
+                ax1.set_title(f"UNBALANCE DETECTED - Dataset {dataset_label} ({dataset_name})\n"
+                             f"Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} | "
+                             f"Rows: {start_idx:,}-{end_idx:,}", fontsize=14, fontweight='bold')
+                ax1.set_xlabel("Time (seconds)")
+                ax1.set_ylabel("Vibration Amplitude")
+                ax1.grid(True, alpha=0.3)
+
+                # Plot 2: Predictions over time
+                ax2 = plt.subplot(3, 1, 2)
+                window_times = np.arange(len(predictions))
+                ax2.plot(window_times, predictions, marker='o', markersize=3, linewidth=1)
+                ax2.axhline(y=UNBALANCE_THRESHOLD, color='r', linestyle='--',
+                           label=f'Threshold ({UNBALANCE_THRESHOLD})')
+                ax2.fill_between(window_times, 0, 1, where=(predictions.flatten() > UNBALANCE_THRESHOLD),
+                                alpha=0.3, color='red', label='Unbalance Detected')
+                ax2.set_title(f"Predictions per Second (Detection Ratio: {detection_ratio*100:.1f}%)")
+                ax2.set_xlabel("Second")
+                ax2.set_ylabel("Prediction Score")
+                ax2.set_ylim([-0.05, 1.05])
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
+
+                # Plot 3: Sample window with highest prediction
+                ax3 = plt.subplot(3, 1, 3)
+                max_pred_idx = np.argmax(predictions)
+                sample_start = max_pred_idx * WINDOW
+                sample_end = sample_start + WINDOW
+                sample_data = minute_data[sample_start:sample_end]
+                sample_time = np.arange(len(sample_data)) / SAMPLES_PER_SECOND
+                ax3.plot(sample_time, sample_data, lw=0.8)
+                ax3.set_title(f"Highest Prediction Window (Prediction: {predictions[max_pred_idx][0]:.4f})")
+                ax3.set_xlabel("Time (seconds)")
+                ax3.set_ylabel("Vibration Amplitude")
+                ax3.grid(True, alpha=0.3)
+
+                plt.tight_layout()
+
+                # Save figure
+                filename = f"unbalance_detection_{dataset_label}_{timestamp_str}_row{start_idx}.png"
+                output_path = os.path.join(output_dir, filename)
+                fig.savefig(output_path, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+
+                print(f"      Figure saved: {output_path}")
+
+            # Simulate real-time processing speed if requested
+            if speed > 0:
+                minute_process_time = time.time() - minute_process_start
+                target_time = 60.0 / speed  # 60 seconds for 1x speed
+                sleep_time = target_time - minute_process_time
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
+        print(f"\nDataset {dataset_label} complete: {total_samples:,} samples processed")
+
+    # Print processing summary
+    total_processing_time = time.time() - processing_start
+    print(f"\n{'='*80}")
+    print(f"Timeseries Processing Complete")
+    print(f"Total unbalance detections: {total_detections}")
+    print(f"Total processing time: {total_processing_time:.2f} seconds")
+    if speed > 0:
+        print(f"Average speed: {speed:.2f}x real-time")
+    print(f"Detection figures saved to: {output_dir}")
+    print(f"{'='*80}")
 
 
 def main():
     """Main execution function."""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='CNN-based Unbalance Detection with Real-time Anomaly Scanning',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Process all datasets at maximum speed
+  python approach_1_cnn.py --dataset all --speed 0
+
+  # Process dataset 4E at real-time speed
+  python approach_1_cnn.py --dataset 4E --speed 1.0
+
+  # Process dataset 1E at 2x real-time speed
+  python approach_1_cnn.py --dataset 1E --speed 2.0
+
+  # Use custom trained model
+  python approach_1_cnn.py --dataset 2E --model-path /path/to/custom_model.h5
+        """)
+
+    parser.add_argument('--dataset', type=str, default='all',
+                       choices=['all', 'All', 'ALL', '0E', '1E', '2E', '3E', '4E'],
+                       help='Dataset to evaluate: all, 0E (no unbalance), 1E, 2E, 3E, or 4E (max unbalance). Default: all')
+
+    parser.add_argument('--speed', type=float, default=0,
+                       help='Processing speed multiplier. 0=maximum speed (no delays), 1.0=real-time (1 min data = 60s processing), 2.0=2x speed, etc. Default: 0 (max speed)')
+
+    parser.add_argument('--model-path', type=str,
+                       default='../../models/reference/cnn_3_layers.h5',
+                       help='Path to trained model file. Default: ../../models/reference/cnn_3_layers.h5')
+
+    parser.add_argument('--data-url', type=str,
+                       default='../../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip',
+                       help='Path or URL to dataset ZIP file')
+
+    parser.add_argument('--output-dir', type=str, default='../../figures/detections',
+                       help='Directory to save detection figures. Default: ../../figures/detections')
+
+    args = parser.parse_args()
+
     print("=" * 80)
     print("Machine Learning Based Unbalance Detection - Approach 1: CNN")
+    print("Real-time Anomaly Detection with 3-Layer CNN")
     print("=" * 80)
 
-    # Configuration
-    # Option a) local file contains a small subset of the entire dataset
-    url = '../../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip'
+    print(f"\nConfiguration:")
+    print(f"  Dataset: {args.dataset}")
+    print(f"  Speed: {'Maximum' if args.speed == 0 else f'{args.speed}x real-time'}")
+    print(f"  Model Path: {args.model_path}")
+    print(f"  Output Directory: {args.output_dir}")
+    print()
 
-    # Option b) the entire dataset can be directly downloaded via public Fraunhofer Fortadis dataspace
-    # url = 'https://fordatis.fraunhofer.de/bitstream/fordatis/151.2/1/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip'
+    # Check if model exists
+    if not os.path.exists(args.model_path):
+        print(f"Error: Model file not found at {args.model_path}")
+        print("\nPlease ensure the reference model exists, or specify a different model with --model-path")
+        return
 
-    # Option c) selected pre-trained models can be found in the directory model/reference
-    use_reference_models = True
-    model_path = '../../models/reference'
-
-    # Option d) all models will be trained again
-    # use_reference_models = False
-    # model_path = '../../models'
-
-    # Load data
-    data = load_data(url)
+    # Load only the datasets we need (much faster!)
+    data = load_data(args.data_url, datasets_to_load=args.dataset)
 
     # Skip warm-up phase
     data = skip_warmup(data)
 
-    # Prepare datasets
-    X, y, X_val, y_val, X_val_separated, y_val_separated, X_dev, y_dev = prepare_datasets(data)
+    # Prepare datasets for validation
+    X_val, y_val = prepare_datasets(data)
 
-    # Train models (or use reference models)
-    train_models(X, y, model_path, use_reference_models)
+    # Load the pre-trained model
+    print("=" * 80)
+    print("STEP 1: Load Pre-trained Model")
+    print("=" * 80)
+    print(f"Loading reference model from: {args.model_path}")
+    model = load_model(args.model_path)
 
-    # Evaluate models
-    accuracies, accuracies_all = evaluate_models(
-        X_val_separated, y_val_separated, X_val, y_val, model_path)
+    # Quick validation (if we have validation data)
+    if len(X_val) > 0:
+        print("\n" + "=" * 80)
+        print("STEP 2: Validate Model Performance")
+        print("=" * 80)
+        X_val_reshaped = np.reshape(X_val, (X_val.shape[0], X_val.shape[1], 1))
+        val_loss, val_acc = model.evaluate(X_val_reshaped, y_val, verbose=0)
+        print(f"Validation accuracy: {val_acc*100:.2f}%")
+        print(f"Validation loss: {val_loss:.4f}")
+    else:
+        val_acc = 0.0
+        print("\n" + "=" * 80)
+        print("STEP 2: Skipping Validation (no validation data loaded)")
+        print("=" * 80)
+
+    # Process evaluation data as timeseries
+    print("\n" + "=" * 80)
+    print("STEP 3: Real-time Anomaly Detection")
+    print("=" * 80)
+    process_timeseries_data(model, data, output_dir=args.output_dir,
+                           datasets=args.dataset, speed=args.speed)
 
     print("\n" + "=" * 80)
-    print("Overall Model Accuracies:")
-    for i, acc in enumerate(accuracies_all):
-        print(f"  {i+1} conv. layer(s): {100.0*acc:.2f}%")
+    print("Analysis Complete!")
     print("=" * 80)
-
-    # Evaluate rotation speed dependency
-    rpm_borders, errors_per_rpm_range = evaluate_rotation_speed_dependency(
-        X_val, y_val, model_path)
-
-    # Plot results
-    plot_results(accuracies, accuracies_all, rpm_borders, errors_per_rpm_range)
-
-    print("\n" + "=" * 80)
-    print("Approach 1 CNN analysis complete!")
-    print("=" * 80)
-    print("\nNote: This script covers the main evaluation.")
-    print("For pairwise training experiments, see the original notebook.")
+    print(f"\nModel: {N_CONV_LAYERS}-layer CNN")
+    if len(X_val) > 0:
+        print(f"Validation Accuracy: {val_acc*100:.2f}%")
+    print(f"Detection Threshold: {UNBALANCE_THRESHOLD}")
+    print(f"Window Size: 1 minute ({MINUTE_WINDOW:,} samples)")
+    print(f"\nCheck the {args.output_dir}/ directory for detected anomalies.")
 
 
 if __name__ == "__main__":
