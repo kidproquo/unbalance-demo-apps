@@ -1,4 +1,4 @@
-# Requirements for Approach 1: CNN on Raw Sensor Data
+# Requirements for Approach 2: FFT FCN on Frequency-transformed Data
 # Machine Learning Based Unbalance Detection
 #
 # IMPORTANT: TensorFlow requires Python 3.8-3.11
@@ -21,7 +21,7 @@ scikit-learn>=0.24.0,<2.0.0
 matplotlib>=3.4.0,<4.0.0
 
 # MCP Server (optional - for real-time monitoring)
-# Enable with: python approach_1_cnn.py --enable-mcp
+# Enable with: python approach_2_fft.py --enable-mcp
 fastmcp>=2.0.0
 mcp>=1.0.0
 uvicorn>=0.38.0
