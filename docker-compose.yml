@@ -30,14 +30,15 @@ services:
       - PYTHONUNBUFFERED=1
     command: >
       python -u data_coordinator.py
-      --max-windows 100
       --time-window 1
       --normal-weight 0.9
+      --publish-rate 1.0
       --redis-host redis
       --redis-stream windows
     volumes:
       - ../data:/app/data:ro
-      - ./figures:/app/figures
+      - ./outputs:/app/outputs
+    working_dir: /app
     networks:
       - unbalance-net
 
@@ -69,9 +70,12 @@ services:
       --speed 1.0
       --enable-mcp
       --mcp-port 8000
+      --model-path /app/models/cnn_3_layers.h5
+      --output-dir /app/outputs/cnn
     volumes:
       - ../data:/app/data:ro
-      - ./figures/detections:/app/figures/detections
+      - ./outputs:/app/outputs
+    working_dir: /app
     networks:
       - unbalance-net
 
@@ -103,9 +107,12 @@ services:
       --speed 1.0
       --enable-mcp
       --mcp-port 8000
+      --model-path /app/models/fft_fcn_4_layers.h5
+      --output-dir /app/outputs/fft
     volumes:
       - ../data:/app/data:ro
-      - ./figures/detections:/app/figures/detections
+      - ./outputs:/app/outputs
+    working_dir: /app
     networks:
       - unbalance-net
 
@@ -137,9 +144,12 @@ services:
       --speed 1.0
       --enable-mcp
       --mcp-port 8000
+      --model-path /app/models/minimal_rfc.joblib
+      --output-dir /app/outputs/rfc
     volumes:
       - ../data:/app/data:ro
-      - ./figures/detections:/app/figures/detections
+      - ./outputs:/app/outputs
+    working_dir: /app
     networks:
       - unbalance-net
 
@@ -162,12 +172,20 @@ networks:
 #   Replace "latest" with version tag (e.g., "v0.1.0")
 #
 # Configuration:
+#   - Coordinator: Infinite loop, publishes 1 window/second (real-time)
 #   - Time window: 1 second
-#   - Speed: 1.0x (real-time)
+#   - Processing speed: 1.0x (real-time)
 #   - MCP servers enabled on ports:
 #     * CNN: http://localhost:12001/sse
 #     * FFT: http://localhost:12002/sse
 #     * RFC: http://localhost:12003/sse
 #
-# All three approaches will process the same windows published by the coordinator,
-# allowing for direct performance comparison on identical data.
+# Outputs:
+#   All outputs are saved to ./outputs/ directory on the host:
+#     ./outputs/cnn/  - CNN detection figures and performance reports
+#     ./outputs/fft/  - FFT detection figures and performance reports
+#     ./outputs/rfc/  - RFC detection figures and performance reports
+#
+# The coordinator runs indefinitely, publishing windows at real-time speed.
+# All three approaches process the same windows for direct performance comparison.
+# Use Ctrl+C or 'docker-compose down' to stop.
