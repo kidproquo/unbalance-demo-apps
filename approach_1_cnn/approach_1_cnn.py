@@ -21,7 +21,8 @@ import pandas as pd
 import numpy as np
 import tensorflow as tf
 import scipy as sc
-import zipfile
+import sys
+from pathlib import Path
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 import os
@@ -38,71 +39,26 @@ from tensorflow.keras.callbacks import ModelCheckpoint
 from tensorflow.keras.regularizers import l1_l2
 from datetime import datetime, timedelta
 
+# Add apps directory to path for utils import
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Configuration
+# Import shared data utilities
+from utils.data_utils import (
+    load_data,
+    skip_warmup,
+    DataGenerator,
+    SAMPLES_PER_SECOND,
+    SKIP_WARMUP as SKIP,
+    DEFAULT_SENSOR as SENSOR
+)
+
+
+# CNN-specific configuration
 LABELS = {'no_unbalance': 0, 'unbalance': 1}
-SENSOR = 'Vibration_1'
-SAMPLES_PER_SECOND = 4096
 SECONDS_PER_ANALYSIS = 1.0
 WINDOW = int(SAMPLES_PER_SECOND * SECONDS_PER_ANALYSIS)
-SKIP = 50000  # Skip warm-up phase
 N_CONV_LAYERS = 3  # Use the most accurate 3-layer CNN model
 UNBALANCE_THRESHOLD = 0.5  # Prediction threshold for unbalance detection
-
-
-def load_data(url, datasets_to_load='all'):
-    """
-    Load measurement data from ZIP file.
-
-    Args:
-        url: Path to the ZIP file containing the dataset
-        datasets_to_load: Which datasets to load - 'all', 'eval_only', or specific like '4E'
-
-    Returns:
-        Dictionary containing requested datasets
-    """
-    print("Loading measurement data...")
-    data = {}
-
-    # Determine which datasets to load
-    if datasets_to_load.upper() == 'ALL':
-        # Load all evaluation datasets for validation and processing
-        labels_to_load = ['0E', '1E', '2E', '3E', '4E']
-    elif datasets_to_load.upper() in ['0E', '1E', '2E', '3E', '4E']:
-        # Load only the specific evaluation dataset requested
-        labels_to_load = [datasets_to_load.upper()]
-    else:
-        # Default: load all evaluation datasets
-        labels_to_load = ['0E', '1E', '2E', '3E', '4E']
-
-    with zipfile.ZipFile(url, 'r') as f:
-        for label in labels_to_load:
-            with f.open(f'{label}.csv', 'r') as c:
-                data[label] = pd.read_csv(c)
-                print(f"  Loaded {label}.csv: {len(data[label])} rows")
-
-    return data
-
-
-def skip_warmup(data, skip=SKIP):
-    """
-    Skip warm-up phase of each measurement.
-
-    Args:
-        data: Dictionary of dataframes
-        skip: Number of samples to skip (default: 50000)
-
-    Returns:
-        Dictionary of dataframes with warm-up phase removed
-    """
-    print(f"\nSkipping first {skip} samples (warm-up phase)...")
-    processed_data = {}
-
-    for label, df in data.items():
-        processed_data[label] = df.iloc[skip:, :]
-        print(f"  {label}: {len(processed_data[label])} rows remaining")
-
-    return processed_data
 
 
 def get_features(data, label):
@@ -381,7 +337,7 @@ def evaluate_rotation_speed_dependency(X_val, y_val, model_path):
     return rpm_borders, errors_per_rpm_range
 
 
-def process_with_weighted_sampling(model, data, output_dir, speed, time_window_seconds, max_windows=None, normal_weight=0.9):
+def process_with_weighted_sampling(model, data, output_dir, speed, time_window_seconds, max_windows=None, normal_weight=0.9, log_interval=10):
     """
     Process data with weighted random sampling.
     Configurable weight on 0E (no unbalance), remaining weight on 1E-4E (random unbalanced).
@@ -394,6 +350,7 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
         time_window_seconds: Time window size in seconds
         max_windows: Maximum number of windows to process (None = infinite with rollover)
         normal_weight: Weight for 0E dataset (0.0-1.0), default 0.9 (90%)
+        log_interval: Log metrics to console every N windows (default: 10)
     """
     total_detections = 0
     processing_start = time.time()
@@ -432,6 +389,22 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
     # Track stats
     dataset_selection_counts = {label: 0 for label in ['0E', '1E', '2E', '3E', '4E']}
     dataset_rollover_counts = {label: 0 for label in ['0E', '1E', '2E', '3E', '4E']}
+
+    # Performance tracking: TP, FP, TN, FN per dataset
+    performance_stats = {
+        '0E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0},  # Ground truth: no unbalance
+        '1E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0},  # Ground truth: unbalance
+        '2E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0},  # Ground truth: unbalance
+        '3E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0},  # Ground truth: unbalance
+        '4E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0},  # Ground truth: unbalance
+    }
+
+    # Create performance report file with start timestamp
+    start_timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    report_filename = os.path.join(output_dir, f"performance_report_{start_timestamp}.txt")
+    print(f"Performance report: {report_filename}")
+    print(f"Updating report every {log_interval} windows")
+    print(f"  (Time interval: {log_interval * time_window_seconds} seconds)\n")
 
     # Keep track of current position in each dataset (with rollover)
     dataset_positions = {label: 0 for label in dataset_windows.keys()}
@@ -564,6 +537,85 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
 
                 print(f"      Figure saved: {output_path}")
 
+            # Track performance metrics
+            # Ground truth: 0E = negative (no unbalance), 1E-4E = positive (unbalance)
+            ground_truth_positive = selected_label != '0E'  # True if 1E-4E
+            predicted_positive = detection_ratio > 0.5       # True if detected
+
+            if ground_truth_positive and predicted_positive:
+                # True Positive: Correctly detected unbalance in 1E-4E
+                performance_stats[selected_label]['TP'] += 1
+                result = 'TP'
+            elif ground_truth_positive and not predicted_positive:
+                # False Negative: Missed unbalance in 1E-4E
+                performance_stats[selected_label]['FN'] += 1
+                result = 'FN'
+            elif not ground_truth_positive and predicted_positive:
+                # False Positive: Incorrectly detected unbalance in 0E
+                performance_stats[selected_label]['FP'] += 1
+                result = 'FP'
+            else:
+                # True Negative: Correctly identified no unbalance in 0E
+                performance_stats[selected_label]['TN'] += 1
+                result = 'TN'
+
+            # Log running metrics and update report file every N windows
+            if (window_idx + 1) % log_interval == 0:
+                # Log to console
+                elapsed_time = time.time() - processing_start
+                print(f"\n{'='*80}")
+                print(f"Running Performance Metrics (after {window_idx + 1} windows, {elapsed_time:.1f}s elapsed)")
+                print(f"{'='*80}")
+                print(f"{'Dataset':<10} {'Processed':<10} {'TP':<6} {'FP':<6} {'TN':<6} {'FN':<6} {'Accuracy':<8}")
+                print(f"{'-'*80}")
+
+                for label in ['0E', '1E', '2E', '3E', '4E']:
+                    if label in dataset_selection_counts and dataset_selection_counts[label] > 0:
+                        stats = performance_stats[label]
+                        total = stats['TP'] + stats['FP'] + stats['TN'] + stats['FN']
+                        accuracy = (stats['TP'] + stats['TN']) / total if total > 0 else 0
+                        print(f"{label:<10} {total:<10} {stats['TP']:<6} {stats['FP']:<6} {stats['TN']:<6} {stats['FN']:<6} {accuracy:<8.3f}")
+
+                # Overall running stats
+                overall_tp = sum(stats['TP'] for stats in performance_stats.values())
+                overall_fp = sum(stats['FP'] for stats in performance_stats.values())
+                overall_tn = sum(stats['TN'] for stats in performance_stats.values())
+                overall_fn = sum(stats['FN'] for stats in performance_stats.values())
+                overall_total = overall_tp + overall_fp + overall_tn + overall_fn
+                overall_accuracy = (overall_tp + overall_tn) / overall_total if overall_total > 0 else 0
+
+                print(f"{'-'*80}")
+                print(f"{'Overall':<10} {overall_total:<10} {overall_tp:<6} {overall_fp:<6} {overall_tn:<6} {overall_fn:<6} {overall_accuracy:<8.3f}")
+                print(f"{'='*80}\n")
+
+                # Write performance report to file
+                with open(report_filename, 'w') as report_file:
+                    report_file.write(f"{'='*80}\n")
+                    report_file.write(f"Performance Metrics\n")
+                    report_file.write(f"{'='*80}\n")
+                    report_file.write(f"{'Dataset':<10} {'Total':<8} {'TP':<8} {'FP':<8} {'TN':<8} {'FN':<8} {'Accuracy':<10} {'Precision':<10} {'Recall':<10}\n")
+                    report_file.write(f"{'-'*80}\n")
+
+                    for label in ['0E', '1E', '2E', '3E', '4E']:
+                        if label in dataset_selection_counts and dataset_selection_counts[label] > 0:
+                            stats = performance_stats[label]
+                            total = stats['TP'] + stats['FP'] + stats['TN'] + stats['FN']
+                            accuracy = (stats['TP'] + stats['TN']) / total if total > 0 else 0
+                            precision = stats['TP'] / (stats['TP'] + stats['FP']) if (stats['TP'] + stats['FP']) > 0 else 0
+                            recall = stats['TP'] / (stats['TP'] + stats['FN']) if (stats['TP'] + stats['FN']) > 0 else 0
+
+                            report_file.write(f"{label:<10} {total:<8} {stats['TP']:<8} {stats['FP']:<8} {stats['TN']:<8} {stats['FN']:<8} "
+                                            f"{accuracy:<10.3f} {precision:<10.3f} {recall:<10.3f}\n")
+
+                    report_file.write(f"{'-'*80}\n")
+                    report_file.write(f"{'Overall':<10} {overall_total:<8} {overall_tp:<8} {overall_fp:<8} {overall_tn:<8} {overall_fn:<8} "
+                                    f"{overall_accuracy:<10.3f} ")
+
+                    # Calculate overall precision and recall
+                    overall_precision = overall_tp / (overall_tp + overall_fp) if (overall_tp + overall_fp) > 0 else 0
+                    overall_recall = overall_tp / (overall_tp + overall_fn) if (overall_tp + overall_fn) > 0 else 0
+                    report_file.write(f"{overall_precision:<10.3f} {overall_recall:<10.3f}\n")
+
             # Simulate real-time processing speed if requested
             if speed > 0:
                 window_process_time = time.time() - window_process_start
@@ -599,15 +651,84 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
             if dataset_rollover_counts[label] > 0:
                 print(f"  {label}: {dataset_rollover_counts[label]} rollover(s)")
 
+    # Print performance metrics
+    print(f"\n{'='*80}")
+    print(f"Performance Metrics")
+    print(f"{'='*80}")
+    print(f"{'Dataset':<10} {'Total':<8} {'TP':<8} {'FP':<8} {'TN':<8} {'FN':<8} {'Accuracy':<10} {'Precision':<10} {'Recall':<10}")
+    print(f"{'-'*80}")
+
+    overall_tp, overall_fp, overall_tn, overall_fn = 0, 0, 0, 0
+
+    for label in ['0E', '1E', '2E', '3E', '4E']:
+        if label in dataset_selection_counts and dataset_selection_counts[label] > 0:
+            stats = performance_stats[label]
+            total = stats['TP'] + stats['FP'] + stats['TN'] + stats['FN']
+
+            # Calculate metrics
+            accuracy = (stats['TP'] + stats['TN']) / total if total > 0 else 0
+            precision = stats['TP'] / (stats['TP'] + stats['FP']) if (stats['TP'] + stats['FP']) > 0 else 0
+            recall = stats['TP'] / (stats['TP'] + stats['FN']) if (stats['TP'] + stats['FN']) > 0 else 0
+
+            print(f"{label:<10} {total:<8} {stats['TP']:<8} {stats['FP']:<8} {stats['TN']:<8} {stats['FN']:<8} "
+                  f"{accuracy:<10.3f} {precision:<10.3f} {recall:<10.3f}")
+
+            # Accumulate overall stats
+            overall_tp += stats['TP']
+            overall_fp += stats['FP']
+            overall_tn += stats['TN']
+            overall_fn += stats['FN']
+
+    # Overall metrics
+    overall_total = overall_tp + overall_fp + overall_tn + overall_fn
+    if overall_total > 0:
+        overall_accuracy = (overall_tp + overall_tn) / overall_total
+        overall_precision = overall_tp / (overall_tp + overall_fp) if (overall_tp + overall_fp) > 0 else 0
+        overall_recall = overall_tp / (overall_tp + overall_fn) if (overall_tp + overall_fn) > 0 else 0
+
+        print(f"{'-'*80}")
+        print(f"{'Overall':<10} {overall_total:<8} {overall_tp:<8} {overall_fp:<8} {overall_tn:<8} {overall_fn:<8} "
+              f"{overall_accuracy:<10.3f} {overall_precision:<10.3f} {overall_recall:<10.3f}")
+
     print(f"\nTotal processing time: {total_processing_time:.2f} seconds")
     if speed > 0:
         print(f"Average speed: {speed:.2f}x real-time")
     print(f"Detection figures saved to: {output_dir}")
+    print(f"Performance report saved to: {report_filename}")
     print(f"{'='*80}")
+
+    # Write final performance report to file
+    with open(report_filename, 'w') as report_file:
+        report_file.write(f"{'='*80}\n")
+        report_file.write(f"Performance Metrics\n")
+        report_file.write(f"{'='*80}\n")
+        report_file.write(f"{'Dataset':<10} {'Total':<8} {'TP':<8} {'FP':<8} {'TN':<8} {'FN':<8} {'Accuracy':<10} {'Precision':<10} {'Recall':<10}\n")
+        report_file.write(f"{'-'*80}\n")
+
+        for label in ['0E', '1E', '2E', '3E', '4E']:
+            if label in dataset_selection_counts and dataset_selection_counts[label] > 0:
+                stats = performance_stats[label]
+                total = stats['TP'] + stats['FP'] + stats['TN'] + stats['FN']
+                accuracy = (stats['TP'] + stats['TN']) / total if total > 0 else 0
+                precision = stats['TP'] / (stats['TP'] + stats['FP']) if (stats['TP'] + stats['FP']) > 0 else 0
+                recall = stats['TP'] / (stats['TP'] + stats['FN']) if (stats['TP'] + stats['FN']) > 0 else 0
+
+                report_file.write(f"{label:<10} {total:<8} {stats['TP']:<8} {stats['FP']:<8} {stats['TN']:<8} {stats['FN']:<8} "
+                                f"{accuracy:<10.3f} {precision:<10.3f} {recall:<10.3f}\n")
+
+        overall_total = overall_tp + overall_fp + overall_tn + overall_fn
+        if overall_total > 0:
+            overall_accuracy = (overall_tp + overall_tn) / overall_total
+            overall_precision = overall_tp / (overall_tp + overall_fp) if (overall_tp + overall_fp) > 0 else 0
+            overall_recall = overall_tp / (overall_tp + overall_fn) if (overall_tp + overall_fn) > 0 else 0
+
+            report_file.write(f"{'-'*80}\n")
+            report_file.write(f"{'Overall':<10} {overall_total:<8} {overall_tp:<8} {overall_fp:<8} {overall_tn:<8} {overall_fn:<8} "
+                            f"{overall_accuracy:<10.3f} {overall_precision:<10.3f} {overall_recall:<10.3f}\n")
 
 
 def process_timeseries_data(model, data, output_dir='../../figures/detections',
-                           datasets='all', speed=1.0, time_window_seconds=60, max_windows=None, normal_weight=0.9):
+                           datasets='all', speed=1.0, time_window_seconds=60, max_windows=None, normal_weight=0.9, log_interval=10):
     """
     Process evaluation data as timeseries with configurable time windows.
     Detect unbalance anomalies and save figures for detections.
@@ -621,6 +742,7 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
         time_window_seconds: Time window size in seconds (default: 60)
         max_windows: Maximum number of windows to process (None = infinite with rollover)
         normal_weight: Weight for 0E dataset in weighted random sampling (default: 0.9)
+        log_interval: Log metrics to console every N windows (default: 10)
     """
     print(f"\n{'='*80}")
     print("Processing Evaluation Data as Timeseries")
@@ -641,7 +763,7 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
         print(f"  Time window: {time_window_seconds} seconds")
         print()
 
-        process_with_weighted_sampling(model, data, output_dir, speed, time_window_seconds, max_windows, normal_weight)
+        process_with_weighted_sampling(model, data, output_dir, speed, time_window_seconds, max_windows, normal_weight, log_interval)
         return
     else:
         # Process single dataset sequentially
@@ -835,6 +957,9 @@ Examples:
     parser.add_argument('--normal-weight', type=float, default=0.9,
                        help='Weight for normal (0E) dataset in weighted random sampling (0.0-1.0). Only applies when --dataset=all. Default: 0.9 (90%% normal, 10%% unbalanced)')
 
+    parser.add_argument('--log-interval', type=int, default=10,
+                       help='Log performance metrics to console every N windows. Default: 10')
+
     parser.add_argument('--model-path', type=str,
                        default='../../models/reference/cnn_3_layers.h5',
                        help='Path to trained model file. Default: ../../models/reference/cnn_3_layers.h5')
@@ -909,7 +1034,8 @@ Examples:
                            datasets=args.dataset, speed=args.speed,
                            time_window_seconds=args.time_window,
                            max_windows=args.max_windows,
-                           normal_weight=args.normal_weight)
+                           normal_weight=args.normal_weight,
+                           log_interval=args.log_interval)
 
     print("\n" + "=" * 80)
     print("Analysis Complete!")

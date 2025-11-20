@@ -98,6 +98,13 @@ Options:
                         - 0.5: 50% normal, 50% unbalanced
                         - Range: 0.0-1.0
 
+  --log-interval INT    Log performance metrics to console and write to CSV every N windows (default: 10)
+                        - 10: Log/write every 10 windows (default)
+                        - 1: Log/write after every window (verbose, real-time)
+                        - 60: Log/write every 60 windows (if window=1s, this is every minute)
+                        - 100: Log/write every 100 windows (less frequent updates)
+                        - Note: Both console logging and CSV writing happen at the same interval
+
   --model-path PATH     Path to trained model file
                         (default: ../../models/reference/cnn_3_layers.h5)
 
@@ -148,6 +155,12 @@ python approach_1_cnn.py --dataset all --max-windows 100
 
 # Infinite processing with rollover (default, Ctrl+C to stop)
 python approach_1_cnn.py --dataset all
+
+# Log metrics every window (verbose mode, useful for debugging)
+python approach_1_cnn.py --dataset all --max-windows 50 --log-interval 1
+
+# Log metrics every 100 windows (less console output)
+python approach_1_cnn.py --dataset all --log-interval 100
 
 # View help
 python approach_1_cnn.py --help
@@ -218,6 +231,33 @@ Edit these in `approach_1_cnn.py` if needed:
   - **Panel 2**: Prediction scores per second with threshold line
   - **Panel 3**: Detailed view of highest prediction window
 
+### 4. Performance Report (saved to `../../figures/detections/`)
+- Filename format: `performance_report_{UTC_timestamp}.txt`
+- Timestamp format: `YYYYMMDD_HHMMSS` (UTC time when processing started)
+- **Updated every N windows** (based on `--log-interval`)
+- Each run creates its own report file with unique timestamp
+- Maintained file that gets overwritten with latest metrics throughout the run
+- Contains performance metrics table with:
+  - Per-dataset statistics: TP, FP, TN, FN counts
+  - Accuracy, Precision, Recall per dataset
+  - Overall performance metrics across all datasets
+- **Metric definitions**:
+  - **TP (True Positive)**: Correctly detected unbalance in 1E-4E
+  - **FP (False Positive)**: Incorrectly detected unbalance in 0E
+  - **TN (True Negative)**: Correctly identified no unbalance in 0E
+  - **FN (False Negative)**: Missed unbalance in 1E-4E
+
+### 5. Performance Summary (Console Output)
+- **Live metrics**: Logged periodically during processing
+  - Default: every 10 windows (configurable with `--log-interval`)
+  - Shows running counts of TP, FP, TN, FN per dataset
+  - Displays current Accuracy, Precision, Recall for each dataset
+  - Example: If window=60s and log-interval=60, updates every hour (60 minutes)
+  - Useful for monitoring long-running processes
+- **Final summary**: Printed at end of processing
+  - Complete performance metrics table
+  - Same format as the performance report file
+
 ## Model Architecture
 
 The 3-layer CNN consists of:
@@ -273,6 +313,17 @@ Mode: Weighted Random Sampling
 
 Processing 1,678 minutes with weighted random sampling...
 
+================================================================================
+Running Performance Metrics (after 10 windows, 42.3s elapsed)
+================================================================================
+Dataset    Processed  TP     FP     TN     FN     Accuracy
+--------------------------------------------------------------------------------
+0E         9          0      1      8      0      0.889
+1E         1          1      0      0      0      1.000
+--------------------------------------------------------------------------------
+Overall    10         1      1      8      0      0.900
+================================================================================
+
   ⚠️  UNBALANCE DETECTED at minute 42
       Source: 3E (Unbalance Level 3)
       Timestamp: 2025-11-19 14:45:12 (UTC)
@@ -291,6 +342,21 @@ Dataset Selection Statistics:
   2E: 41 times (2.4%)
   3E: 43 times (2.6%)
   4E: 42 times (2.5%)
+
+================================================================================
+Performance Metrics
+================================================================================
+Dataset    Total    TP       FP       TN       FN       Accuracy   Precision  Recall
+--------------------------------------------------------------------------------
+0E         1510     0        35       1475     0        0.977      0.000      N/A
+1E         42       40       0        0        2        0.952      1.000      0.952
+2E         41       39       0        0        2        0.951      1.000      0.951
+3E         43       41       0        0        2        0.953      1.000      0.953
+4E         42       40       0        0        2        0.952      1.000      0.952
+--------------------------------------------------------------------------------
+Overall    1678     160      35       1475     8        0.974      0.821      0.952
+
+Performance report saved to: ../../figures/detections/performance_report_20251119_145230.txt
 ```
 
 ## Important Notes
