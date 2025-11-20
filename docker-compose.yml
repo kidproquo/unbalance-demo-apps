@@ -24,6 +24,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      approach-cnn:
+        condition: service_healthy
+      approach-fft:
+        condition: service_healthy
+      approach-rfc:
+        condition: service_healthy
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -51,8 +57,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      coordinator:
-        condition: service_started
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/ready"]
       interval: 5s
@@ -211,16 +215,18 @@ networks:
 #   Services start sequentially to avoid overloading the system during heavy
 #   model/data loading. The startup order is:
 #     1. Redis (waits for health check)
-#     2. Coordinator (starts publishing windows)
-#     3. CNN approach (waits for coordinator, then loads model/data)
-#     4. FFT approach (waits for CNN to be fully loaded and healthy)
-#     5. RFC approach (waits for FFT to be fully loaded and healthy)
+#     2. CNN approach (loads model/data, signals ready)
+#     3. FFT approach (waits for CNN to be healthy, then loads)
+#     4. RFC approach (waits for FFT to be healthy, then loads)
+#     5. Coordinator (waits for all 3 approaches to be healthy, starts publishing)
+#
+#   This ensures all consumers are ready before the producer starts publishing.
 #
 #   Health checks ensure each approach is fully loaded before the next starts:
 #   - Each approach writes /tmp/ready when model/data are loaded
 #   - Health check verifies /tmp/ready exists (checks every 5s)
 #   - start_period: 60s gives apps time to load before health checks begin
-#   - Next approach only starts when previous is healthy (fully ready)
+#   - Coordinator only starts when all approaches are healthy (ready to consume)
 #
 # Outputs:
 #   All outputs are saved to ./outputs/ directory on the host:
