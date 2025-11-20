@@ -1047,6 +1047,12 @@ Examples:
         print(f"  Consumer Name: {args.consumer_name}")
         print()
 
+        # Signal that we're ready (for health checks)
+        with open('/tmp/ready', 'w') as f:
+            f.write('ready\n')
+        print("✓ Application ready - health check enabled")
+        print()
+
         redis_config = RedisConfig(host=args.redis_host, port=args.redis_port)
         process_from_redis(
             model=model,

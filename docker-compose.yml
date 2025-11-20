@@ -51,6 +51,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      coordinator:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -89,6 +97,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      approach-cnn:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -127,6 +143,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      approach-fft:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -182,6 +206,21 @@ networks:
 #     * CNN: http://localhost:12001/sse
 #     * FFT: http://localhost:12002/sse
 #     * RFC: http://localhost:12003/sse
+#
+# Startup Sequence:
+#   Services start sequentially to avoid overloading the system during heavy
+#   model/data loading. The startup order is:
+#     1. Redis (waits for health check)
+#     2. Coordinator (starts publishing windows)
+#     3. CNN approach (waits for coordinator, then loads model/data)
+#     4. FFT approach (waits for CNN to be fully loaded and healthy)
+#     5. RFC approach (waits for FFT to be fully loaded and healthy)
+#
+#   Health checks ensure each approach is fully loaded before the next starts:
+#   - Each approach writes /tmp/ready when model/data are loaded
+#   - Health check verifies /tmp/ready exists (checks every 5s)
+#   - start_period: 60s gives apps time to load before health checks begin
+#   - Next approach only starts when previous is healthy (fully ready)
 #
 # Outputs:
 #   All outputs are saved to ./outputs/ directory on the host:
