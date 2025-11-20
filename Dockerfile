@@ -3,6 +3,18 @@
 
 FROM python:3.11-slim
 
+# Build arguments
+ARG VERSION=unknown
+ARG BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+# Labels
+LABEL org.opencontainers.image.title="Unbalanced Demo Apps"
+LABEL org.opencontainers.image.description="Synchronized unbalance detection using CNN, FFT FCN, and Random Forest"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.source="https://github.com/kidproquo/unbalanced-demo-apps"
+LABEL org.opencontainers.image.authors="Prince"
+
 # Set working directory
 WORKDIR /app
 
