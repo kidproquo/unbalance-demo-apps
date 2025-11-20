@@ -930,7 +930,7 @@ Examples:
     print("=" * 80)
 
     # Load data from ZIP file
-    data_zip_path = '../../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip'  # Still need to go up to parent
+    data_zip_path = '../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip'
     data = load_data(data_zip_path, datasets_to_load=datasets_to_load)
     data_prepared = prepare_datasets_minimal(data)
 

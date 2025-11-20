@@ -30,8 +30,8 @@ COPY utils/ /app/utils/
 # Copy models
 COPY models/ /app/models/
 
-# Create output directory
-RUN mkdir -p /app/figures/detections
+# Create data and output directories
+RUN mkdir -p /app/data /app/figures/detections
 
 # Install Python dependencies for all approaches
 # We'll install all dependencies in one image for simplicity

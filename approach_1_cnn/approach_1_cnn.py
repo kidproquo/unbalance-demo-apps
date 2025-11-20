@@ -1237,7 +1237,7 @@ Examples:
                        help='Path to trained model file. Default: ../models/cnn_3_layers.h5')
 
     parser.add_argument('--data-url', type=str,
-                       default='../../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip',
+                       default='../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip',
                        help='Path or URL to dataset ZIP file')
 
     parser.add_argument('--output-dir', type=str, default='../figures/detections',
