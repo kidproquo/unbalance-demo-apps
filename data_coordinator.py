@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 # Add current directory to path for utils
 sys.path.insert(0, str(Path(__file__).parent))
-from utils.redis_client import RedisConfig, WindowPublisher
+from utils.redis_client import RedisConfig, WindowPublisher, test_redis_connection
 
 
 # Constants
@@ -121,9 +121,23 @@ Examples:
         print(f"  {label}: {n_windows:,} windows ({duration_minutes:.1f} minutes)")
     print()
 
+    # Test Redis connection first
+    print("=" * 80)
+    print("Testing Redis Connection")
+    print("=" * 80)
+    redis_config = RedisConfig(host=args.redis_host, port=args.redis_port)
+    if not test_redis_connection(redis_config):
+        print("\nError: Cannot connect to Redis server")
+        print(f"  Host: {redis_config.host}")
+        print(f"  Port: {redis_config.port}")
+        print("\nPlease ensure Redis is running:")
+        print("  docker run -p 6379:6379 redis:7-alpine")
+        print("Or check your --redis-host and --redis-port arguments")
+        return
+    print()
+
     # Initialize Redis publisher
     print("Connecting to Redis...")
-    redis_config = RedisConfig(host=args.redis_host, port=args.redis_port)
     publisher = WindowPublisher(redis_config, stream_name=args.redis_stream)
 
     # Track dataset selection and rollover

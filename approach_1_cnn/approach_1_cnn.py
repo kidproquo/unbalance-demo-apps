@@ -53,7 +53,7 @@ from utils.data_utils import (
     SKIP_WARMUP as SKIP,
     DEFAULT_SENSOR as SENSOR
 )
-from utils.redis_client import RedisConfig, WindowConsumer
+from utils.redis_client import RedisConfig, WindowConsumer, test_redis_connection
 
 
 # CNN-specific configuration
@@ -1275,6 +1275,22 @@ Examples:
     print(f"  Output Directory: {args.output_dir}")
     print(f"  MCP Server: {'Enabled' if args.enable_mcp else 'Disabled'}")
     print()
+
+    # Test Redis connection if in Redis mode
+    if args.redis_mode:
+        print("=" * 80)
+        print("Testing Redis Connection")
+        print("=" * 80)
+        redis_config = RedisConfig(host=args.redis_host, port=args.redis_port)
+        if not test_redis_connection(redis_config):
+            print("\nError: Cannot connect to Redis server")
+            print(f"  Host: {redis_config.host}")
+            print(f"  Port: {redis_config.port}")
+            print("\nPlease ensure Redis is running:")
+            print("  docker run -p 6379:6379 redis:7-alpine")
+            print("Or check your --redis-host and --redis-port arguments")
+            return
+        print()
 
     # Start MCP server in background thread if enabled
     mcp_thread = None
