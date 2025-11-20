@@ -76,9 +76,27 @@ Options:
 
   --speed FLOAT         Processing speed multiplier (default: 0)
                         - 0: Maximum speed (no delays)
-                        - 1.0: Real-time (1 min data = 60s processing)
+                        - 1.0: Real-time (window time = processing time)
                         - 2.0: 2x real-time speed
                         - 0.5: Half real-time speed
+
+  --time-window INT     Time window size in seconds (default: 60)
+                        - 60: 1 minute windows (default)
+                        - 120: 2 minute windows
+                        - 30: 30 second windows
+                        - Adjusts how much data is analyzed at once
+
+  --max-windows INT     Maximum number of windows to process (default: None)
+                        - None: Infinite processing with rollover (Ctrl+C to stop)
+                        - 100: Process exactly 100 windows then stop
+                        - Useful for testing or limited runs
+
+  --normal-weight FLOAT Weight for normal (0E) dataset in weighted random sampling (default: 0.9)
+                        - Only applies when --dataset=all
+                        - 0.9: 90% normal, 10% unbalanced (default)
+                        - 0.75: 75% normal, 25% unbalanced
+                        - 0.5: 50% normal, 50% unbalanced
+                        - Range: 0.0-1.0
 
   --model-path PATH     Path to trained model file
                         (default: ../../models/reference/cnn_3_layers.h5)
@@ -95,14 +113,20 @@ Options:
 ### Examples
 
 ```bash
-# Process all datasets at maximum speed (uses reference model)
+# Process all datasets at maximum speed with default 1-minute windows
 python approach_1_cnn.py
 
 # Process only dataset 4E (maximum unbalance) at real-time speed
 python approach_1_cnn.py --dataset 4E --speed 1.0
 
-# Process dataset 2E at 2x real-time speed
-python approach_1_cnn.py --dataset 2E --speed 2.0
+# Process with 30-second windows instead of 1-minute
+python approach_1_cnn.py --dataset all --time-window 30
+
+# Process with 2-minute windows for longer-term analysis
+python approach_1_cnn.py --dataset 2E --time-window 120
+
+# Real-time processing with 1-minute windows
+python approach_1_cnn.py --dataset all --time-window 60 --speed 1.0
 
 # Process only dataset 0E (baseline, no unbalance)
 python approach_1_cnn.py --dataset 0E
@@ -112,6 +136,18 @@ python approach_1_cnn.py --dataset 1E --model-path /path/to/custom_model.h5
 
 # Process all datasets with custom output directory
 python approach_1_cnn.py --dataset all --output-dir ./my_detections
+
+# Process with custom normal weight (75% normal, 25% unbalanced)
+python approach_1_cnn.py --dataset all --normal-weight 0.75
+
+# Process with balanced sampling (50% normal, 50% unbalanced)
+python approach_1_cnn.py --dataset all --normal-weight 0.5
+
+# Process exactly 100 windows then stop
+python approach_1_cnn.py --dataset all --max-windows 100
+
+# Infinite processing with rollover (default, Ctrl+C to stop)
+python approach_1_cnn.py --dataset all
 
 # View help
 python approach_1_cnn.py --help
@@ -125,31 +161,36 @@ python approach_1_cnn.py --help
 4. **Timeseries Processing**:
 
    **For Single Dataset (e.g., `--dataset 4E`):**
-   - Processes the dataset sequentially minute-by-minute
-   - Each minute: 245,760 samples @ 4096 Hz
+   - Processes the dataset sequentially window-by-window
+   - Default: 60-second windows (245,760 samples @ 4096 Hz)
+   - Configurable via `--time-window` parameter
 
    **For All Datasets (`--dataset all`):**
    - **Weighted Random Sampling** (simulates realistic conditions):
-     - 75% probability: samples from 0E (no unbalance)
-     - 25% probability: randomly samples from 1E-4E (unbalanced)
-   - Each minute is randomly selected from the weighted pool
+     - 90% probability: samples from 0E (no unbalance) by default
+     - 10% probability: randomly samples from 1E-4E (unbalanced) by default
+     - Configurable via `--normal-weight` parameter
+   - Each time window is randomly selected from the weighted pool
    - Simulates real-world scenario where most operation is normal
 
    **Detection Logic (Both Modes):**
-   - Each minute divided into 60 one-second windows
-   - CNN predicts unbalance for each window
-   - Uses majority voting (>50%) to determine if the minute shows unbalance
+   - Each time window divided into one-second sub-windows
+   - CNN predicts unbalance for each second
+   - Uses majority voting (>50%) to determine if the window shows unbalance
 
 5. **Detection & Logging**: When unbalance is detected:
-   - Prints timestamp, row indices, and detection statistics
+   - Prints system UTC timestamp, row indices, and detection statistics
    - Shows which source dataset the data came from
    - Generates a comprehensive 3-panel figure
-   - Saves figure with timestamp in filename
+   - Saves figure with UTC timestamp in filename
 
 ## Configuration
 
 ### Command-Line Arguments (Recommended)
 - `--dataset`: Which dataset to process (0E, 1E, 2E, 3E, 4E, or all)
+- `--time-window`: Time window size in seconds (default: 60)
+- `--max-windows`: Maximum windows to process (default: None = infinite)
+- `--normal-weight`: Weight for normal data in sampling (default: 0.9 = 90%)
 - `--speed`: Processing speed (0=max, 1.0=real-time, >1=faster)
 - `--model-path`: Path to model file (default: reference model)
 - `--output-dir`: Where to save detection figures
@@ -157,20 +198,21 @@ python approach_1_cnn.py --help
 ### Code Constants (Advanced)
 Edit these in `approach_1_cnn.py` if needed:
 - `UNBALANCE_THRESHOLD`: Prediction threshold for detection (default: 0.5)
-- `MINUTE_WINDOW`: Size of processing window in samples (default: 60 * 4096)
+- `SAMPLES_PER_SECOND`: Sampling rate (4096 Hz, fixed)
 
 ## Outputs
 
 ### 1. Console Output
 - Training progress and loss/accuracy metrics
-- Real-time detection alerts with timestamps and row indices
+- Real-time detection alerts with UTC timestamps and row indices
 - Summary statistics
 
 ### 2. Model Files
 - Uses pre-trained model: `../../models/reference/cnn_3_layers.h5`
 
 ### 3. Detection Figures (saved to `../../figures/detections/`)
-- Filename format: `unbalance_detection_{dataset}_{timestamp}_row{index}.png`
+- Filename format: `unbalance_detection_{dataset}_{UTC_timestamp}_window{idx}_row{index}.png`
+- Timestamp format: `YYYYMMDD_HHMMSS` (UTC time)
 - Each figure contains:
   - **Panel 1**: Full minute of vibration data
   - **Panel 2**: Prediction scores per second with threshold line
@@ -210,18 +252,18 @@ Each dataset represents different levels of mechanical unbalance from a rotating
 ### Single Dataset Mode
 ```
 ⚠️  UNBALANCE DETECTED at minute 15
-    Timestamp: 2020-01-01 00:15:00
+    Timestamp: 2025-11-19 14:32:45 (UTC)
     Row index: 3,686,400 - 3,932,160
     Detection ratio: 95.0%
     Mean prediction: 0.9234
-    Figure saved: ../../figures/detections/unbalance_detection_4E_20200101_001500_row3686400.png
+    Figure saved: ../../figures/detections/unbalance_detection_4E_20251119_143245_row3686400.png
 ```
 
 ### Weighted Random Sampling Mode (All Datasets)
 ```
 Mode: Weighted Random Sampling
-  75% weight on 0E (no unbalance)
-  25% weight on 1E-4E (unbalanced, randomly selected)
+  90% weight on 0E (no unbalance)
+  10% weight on 1E-4E (unbalanced, randomly selected)
 
 0E: 1,678 minutes available
 1E: 1,678 minutes available
@@ -233,22 +275,22 @@ Processing 1,678 minutes with weighted random sampling...
 
   ⚠️  UNBALANCE DETECTED at minute 42
       Source: 3E (Unbalance Level 3)
-      Timestamp: 2020-01-01 00:42:00
+      Timestamp: 2025-11-19 14:45:12 (UTC)
       Row index: 614,400 - 860,160
       Detection ratio: 88.3%
       Mean prediction: 0.8521
-      Figure saved: ../../figures/detections/...
+      Figure saved: ../../figures/detections/unbalance_detection_3E_20251119_144512_row614400.png
 
 Weighted Random Sampling Complete
 Total minutes processed: 1,678
-Total unbalance detections: 127
+Total unbalance detections: 85
 
 Dataset Selection Statistics:
-  0E: 1,258 times (75.0%)
-  1E: 105 times (6.3%)
-  2E: 110 times (6.6%)
-  3E: 98 times (5.8%)
-  4E: 107 times (6.4%)
+  0E: 1,510 times (90.0%)
+  1E: 42 times (2.5%)
+  2E: 41 times (2.4%)
+  3E: 43 times (2.6%)
+  4E: 42 times (2.5%)
 ```
 
 ## Important Notes
@@ -264,12 +306,14 @@ Dataset Selection Statistics:
 - First 50,000 samples are skipped to avoid warm-up phase noise
 - Detection uses majority voting across 60 one-second windows per minute
 - Figures are only generated when >50% of windows in a minute detect unbalance
+- **Timestamps use system UTC time** for all detection events and filenames
 
 ### Weighted Random Sampling (All Datasets Mode)
 - **Simulates realistic operating conditions** where most time is normal operation
-- **75% weight on 0E**: Most samples from normal (no unbalance) data
-- **25% weight on 1E-4E**: Occasional samples from unbalanced conditions (randomly distributed)
-- Each minute randomly selects a source dataset based on weights
+- **90% weight on 0E (default)**: Most samples from normal (no unbalance) data
+- **10% weight on 1E-4E (default)**: Occasional samples from unbalanced conditions (randomly distributed)
+- **Configurable via `--normal-weight`**: Adjust the balance between normal and unbalanced data
+- Each time window randomly selects a source dataset based on weights
 - Provides statistics showing actual distribution at the end
 
 ### Workflow
@@ -278,5 +322,6 @@ Every Run:    Load Pre-trained Model → Validate → Detect Anomalies
               (Fast! No training needed!)
 
 Single Dataset:  Sequential processing through one dataset
-All Datasets:    Weighted random sampling (75% normal, 25% unbalanced)
+All Datasets:    Weighted random sampling (90% normal, 10% unbalanced by default)
+                 Configurable via --normal-weight parameter
 ```

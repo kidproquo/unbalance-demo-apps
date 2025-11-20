@@ -47,7 +47,6 @@ SECONDS_PER_ANALYSIS = 1.0
 WINDOW = int(SAMPLES_PER_SECOND * SECONDS_PER_ANALYSIS)
 SKIP = 50000  # Skip warm-up phase
 N_CONV_LAYERS = 3  # Use the most accurate 3-layer CNN model
-MINUTE_WINDOW = 60 * SAMPLES_PER_SECOND  # 1 minute of data
 UNBALANCE_THRESHOLD = 0.5  # Prediction threshold for unbalance detection
 
 
@@ -382,185 +381,224 @@ def evaluate_rotation_speed_dependency(X_val, y_val, model_path):
     return rpm_borders, errors_per_rpm_range
 
 
-def process_with_weighted_sampling(model, data, output_dir, speed):
+def process_with_weighted_sampling(model, data, output_dir, speed, time_window_seconds, max_windows=None, normal_weight=0.9):
     """
     Process data with weighted random sampling.
-    75% weight on 0E (no unbalance), 25% on 1E-4E (random unbalanced).
+    Configurable weight on 0E (no unbalance), remaining weight on 1E-4E (random unbalanced).
 
     Args:
         model: Trained CNN model
         data: Dictionary of evaluation datasets
         output_dir: Directory to save detection figures
         speed: Processing speed multiplier
+        time_window_seconds: Time window size in seconds
+        max_windows: Maximum number of windows to process (None = infinite with rollover)
+        normal_weight: Weight for 0E dataset (0.0-1.0), default 0.9 (90%)
     """
     total_detections = 0
-    start_time = datetime(2020, 1, 1, 0, 0, 0)
     processing_start = time.time()
 
-    # Calculate how many minutes we can process from each dataset
-    dataset_minutes = {}
+    # Calculate time window in samples
+    time_window_samples = int(time_window_seconds * SAMPLES_PER_SECOND)
+
+    # Calculate how many windows are available in each dataset (for rollover)
+    dataset_windows = {}
     for label in ['0E', '1E', '2E', '3E', '4E']:
         if label in data:
             total_samples = len(data[label][SENSOR].values)
-            n_minutes = int(np.floor(total_samples / MINUTE_WINDOW))
-            dataset_minutes[label] = n_minutes
-            print(f"{label}: {n_minutes} minutes available")
+            n_windows = int(np.floor(total_samples / time_window_samples))
+            dataset_windows[label] = n_windows
+            print(f"{label}: {n_windows} windows available ({n_windows * time_window_seconds / 60:.1f} minutes)")
 
-    if not dataset_minutes:
+    if not dataset_windows:
         print("No data available to process")
         return
 
-    # Determine total number of minutes to process (use the maximum available)
-    max_minutes = max(dataset_minutes.values())
-    print(f"\nProcessing {max_minutes} minutes with weighted random sampling...")
+    # Determine how many windows to process
+    print(f"\nWeighted Random Sampling Configuration:")
+    print(f"  Normal (0E) weight: {normal_weight*100:.0f}%")
+    print(f"  Unbalanced (1E-4E) weight: {(1-normal_weight)*100:.0f}%")
+
+    if max_windows is None:
+        # Infinite mode - process until user stops (Ctrl+C)
+        print(f"\nContinuous processing mode (infinite with rollover)")
+        print(f"Press Ctrl+C to stop")
+        num_windows_to_process = float('inf')
+    else:
+        num_windows_to_process = max_windows
+        print(f"\nProcessing {max_windows} windows ({time_window_seconds}s each, {max_windows * time_window_seconds / 60:.1f} minutes total) with weighted random sampling...")
     print()
 
     # Track stats
     dataset_selection_counts = {label: 0 for label in ['0E', '1E', '2E', '3E', '4E']}
+    dataset_rollover_counts = {label: 0 for label in ['0E', '1E', '2E', '3E', '4E']}
 
-    # Keep track of current position in each dataset
-    dataset_positions = {label: 0 for label in dataset_minutes.keys()}
+    # Keep track of current position in each dataset (with rollover)
+    dataset_positions = {label: 0 for label in dataset_windows.keys()}
 
-    for minute_idx in range(max_minutes):
-        minute_process_start = time.time()
+    window_idx = 0
+    try:
+        while window_idx < num_windows_to_process:
+            window_process_start = time.time()
 
-        # Weighted random selection
-        # 75% chance of selecting 0E, 25% chance of selecting from 1E-4E
-        rand_val = np.random.random()
+            # Weighted random selection
+            # Use configured normal_weight for selecting 0E vs 1E-4E
+            rand_val = np.random.random()
 
-        if rand_val < 0.75 and '0E' in data and dataset_positions['0E'] < dataset_minutes['0E']:
-            # Select 0E (no unbalance)
-            selected_label = '0E'
-            selected_name = 'No Unbalance'
-        else:
-            # Select randomly from 1E-4E (unbalanced datasets)
-            unbalanced_labels = [label for label in ['1E', '2E', '3E', '4E']
-                                if label in data and dataset_positions[label] < dataset_minutes[label]]
-            if not unbalanced_labels:
-                # If no unbalanced data available, try 0E
-                if '0E' in data and dataset_positions['0E'] < dataset_minutes['0E']:
+            if rand_val < normal_weight and '0E' in data:
+                # Select 0E (no unbalance)
+                selected_label = '0E'
+                selected_name = 'No Unbalance'
+            else:
+                # Select randomly from 1E-4E (unbalanced datasets)
+                unbalanced_labels = [label for label in ['1E', '2E', '3E', '4E'] if label in data]
+                if not unbalanced_labels:
+                    # If no unbalanced data available, use 0E
                     selected_label = '0E'
                     selected_name = 'No Unbalance'
                 else:
-                    # No data left to process
-                    break
-            else:
-                selected_label = np.random.choice(unbalanced_labels)
-                level = ['1E', '2E', '3E', '4E'].index(selected_label) + 1
-                selected_name = f'Unbalance Level {level}'
+                    selected_label = np.random.choice(unbalanced_labels)
+                    level = ['1E', '2E', '3E', '4E'].index(selected_label) + 1
+                    selected_name = f'Unbalance Level {level}'
 
-        # Track selection
-        dataset_selection_counts[selected_label] += 1
+            # Track selection
+            dataset_selection_counts[selected_label] += 1
 
-        # Get the current minute from the selected dataset
-        current_pos = dataset_positions[selected_label]
-        sensor_data = data[selected_label][SENSOR].values
+            # Get the current window from the selected dataset (with rollover)
+            current_pos = dataset_positions[selected_label]
 
-        start_idx = current_pos * MINUTE_WINDOW
-        end_idx = start_idx + MINUTE_WINDOW
-        minute_data = sensor_data[start_idx:end_idx]
+            # Rollover if we've reached the end
+            if current_pos >= dataset_windows[selected_label]:
+                current_pos = 0
+                dataset_positions[selected_label] = 0
+                dataset_rollover_counts[selected_label] += 1
+                if dataset_rollover_counts[selected_label] == 1:
+                    print(f"\n  🔄 Dataset {selected_label} rolled over to beginning")
 
-        # Move to next minute in this dataset
-        dataset_positions[selected_label] += 1
+            sensor_data = data[selected_label][SENSOR].values
 
-        # Split into 1-second windows (60 windows per minute)
-        n_windows = int(np.floor(len(minute_data) / WINDOW))
-        minute_data_windowed = minute_data[:n_windows * WINDOW].reshape((n_windows, WINDOW, 1))
+            start_idx = current_pos * time_window_samples
+            end_idx = start_idx + time_window_samples
+            window_data = sensor_data[start_idx:end_idx]
 
-        # Predict on all windows in this minute
-        predictions = model.predict(minute_data_windowed, verbose=0)
-        predictions_binary = (predictions > UNBALANCE_THRESHOLD).astype(int).flatten()
+            # Move to next window in this dataset
+            dataset_positions[selected_label] += 1
 
-        # Check if unbalance detected (majority voting)
-        unbalance_detections = np.sum(predictions_binary)
-        detection_ratio = unbalance_detections / len(predictions_binary)
+            # Split into 1-second windows for prediction
+            n_second_windows = int(np.floor(len(window_data) / WINDOW))
+            window_data_windowed = window_data[:n_second_windows * WINDOW].reshape((n_second_windows, WINDOW, 1))
 
-        # Calculate timestamp
-        current_time = start_time + timedelta(seconds=minute_idx * 60)
-        timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
+            # Predict on all 1-second windows in this time window
+            predictions = model.predict(window_data_windowed, verbose=0)
+            predictions_binary = (predictions > UNBALANCE_THRESHOLD).astype(int).flatten()
 
-        # If significant unbalance detected (>50% of windows), save figure
-        if detection_ratio > 0.5:
-            total_detections += 1
+            # Check if unbalance detected (majority voting)
+            unbalance_detections = np.sum(predictions_binary)
+            detection_ratio = unbalance_detections / len(predictions_binary)
 
-            print(f"\n  ⚠️  UNBALANCE DETECTED at minute {minute_idx + 1}")
-            print(f"      Source: {selected_label} ({selected_name})")
-            print(f"      Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"      Row index: {start_idx:,} - {end_idx:,}")
-            print(f"      Detection ratio: {detection_ratio*100:.1f}%")
-            print(f"      Mean prediction: {np.mean(predictions):.4f}")
+            # Calculate timestamp (use system UTC time)
+            current_time = datetime.utcnow()
+            timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
 
-            # Generate and save figure
-            fig = plt.figure(figsize=(15, 10))
+            # If significant unbalance detected (>50% of windows), save figure
+            if detection_ratio > 0.5:
+                total_detections += 1
 
-            # Plot 1: Full minute timeseries
-            ax1 = plt.subplot(3, 1, 1)
-            time_axis = np.arange(len(minute_data)) / SAMPLES_PER_SECOND
-            ax1.plot(time_axis, minute_data, lw=0.5)
-            ax1.set_title(f"UNBALANCE DETECTED - Dataset {selected_label} ({selected_name})\n"
-                         f"Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} | "
-                         f"Rows: {start_idx:,}-{end_idx:,}", fontsize=14, fontweight='bold')
-            ax1.set_xlabel("Time (seconds)")
-            ax1.set_ylabel("Vibration Amplitude")
-            ax1.grid(True, alpha=0.3)
+                print(f"\n  ⚠️  UNBALANCE DETECTED at window {window_idx}")
+                print(f"      Source: {selected_label} ({selected_name})")
+                print(f"      Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                print(f"      Row index: {start_idx:,} - {end_idx:,}")
+                print(f"      Detection ratio: {detection_ratio*100:.1f}%")
+                print(f"      Mean prediction: {np.mean(predictions):.4f}")
 
-            # Plot 2: Predictions over time
-            ax2 = plt.subplot(3, 1, 2)
-            window_times = np.arange(len(predictions))
-            ax2.plot(window_times, predictions, marker='o', markersize=3, linewidth=1)
-            ax2.axhline(y=UNBALANCE_THRESHOLD, color='r', linestyle='--',
-                       label=f'Threshold ({UNBALANCE_THRESHOLD})')
-            ax2.fill_between(window_times, 0, 1, where=(predictions.flatten() > UNBALANCE_THRESHOLD),
-                            alpha=0.3, color='red', label='Unbalance Detected')
-            ax2.set_title(f"Predictions per Second (Detection Ratio: {detection_ratio*100:.1f}%)")
-            ax2.set_xlabel("Second")
-            ax2.set_ylabel("Prediction Score")
-            ax2.set_ylim([-0.05, 1.05])
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
+                # Generate and save figure
+                fig = plt.figure(figsize=(15, 10))
 
-            # Plot 3: Sample window with highest prediction
-            ax3 = plt.subplot(3, 1, 3)
-            max_pred_idx = np.argmax(predictions)
-            sample_start = max_pred_idx * WINDOW
-            sample_end = sample_start + WINDOW
-            sample_data = minute_data[sample_start:sample_end]
-            sample_time = np.arange(len(sample_data)) / SAMPLES_PER_SECOND
-            ax3.plot(sample_time, sample_data, lw=0.8)
-            ax3.set_title(f"Highest Prediction Window (Prediction: {predictions[max_pred_idx][0]:.4f})")
-            ax3.set_xlabel("Time (seconds)")
-            ax3.set_ylabel("Vibration Amplitude")
-            ax3.grid(True, alpha=0.3)
+                # Plot 1: Full time window timeseries
+                ax1 = plt.subplot(3, 1, 1)
+                time_axis = np.arange(len(window_data)) / SAMPLES_PER_SECOND
+                ax1.plot(time_axis, window_data, lw=0.5)
+                ax1.set_title(f"UNBALANCE DETECTED - Dataset {selected_label} ({selected_name})\n"
+                             f"Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC | "
+                             f"Rows: {start_idx:,}-{end_idx:,} | Window: {time_window_seconds}s",
+                             fontsize=14, fontweight='bold')
+                ax1.set_xlabel("Time (seconds)")
+                ax1.set_ylabel("Vibration Amplitude")
+                ax1.grid(True, alpha=0.3)
 
-            plt.tight_layout()
+                # Plot 2: Predictions over time
+                ax2 = plt.subplot(3, 1, 2)
+                pred_times = np.arange(len(predictions))
+                ax2.plot(pred_times, predictions, marker='o', markersize=3, linewidth=1)
+                ax2.axhline(y=UNBALANCE_THRESHOLD, color='r', linestyle='--',
+                           label=f'Threshold ({UNBALANCE_THRESHOLD})')
+                ax2.fill_between(pred_times, 0, 1, where=(predictions.flatten() > UNBALANCE_THRESHOLD),
+                                alpha=0.3, color='red', label='Unbalance Detected')
+                ax2.set_title(f"Predictions per Second (Detection Ratio: {detection_ratio*100:.1f}%)")
+                ax2.set_xlabel("Second")
+                ax2.set_ylabel("Prediction Score")
+                ax2.set_ylim([-0.05, 1.05])
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
 
-            # Save figure
-            filename = f"unbalance_detection_{selected_label}_{timestamp_str}_minute{minute_idx}_row{start_idx}.png"
-            output_path = os.path.join(output_dir, filename)
-            fig.savefig(output_path, dpi=150, bbox_inches='tight')
-            plt.close(fig)
+                # Plot 3: Sample window with highest prediction
+                ax3 = plt.subplot(3, 1, 3)
+                max_pred_idx = np.argmax(predictions)
+                sample_start = max_pred_idx * WINDOW
+                sample_end = sample_start + WINDOW
+                sample_data = window_data[sample_start:sample_end]
+                sample_time = np.arange(len(sample_data)) / SAMPLES_PER_SECOND
+                ax3.plot(sample_time, sample_data, lw=0.8)
+                ax3.set_title(f"Highest Prediction Window (Prediction: {predictions[max_pred_idx][0]:.4f})")
+                ax3.set_xlabel("Time (seconds)")
+                ax3.set_ylabel("Vibration Amplitude")
+                ax3.grid(True, alpha=0.3)
 
-            print(f"      Figure saved: {output_path}")
+                plt.tight_layout()
 
-        # Simulate real-time processing speed if requested
-        if speed > 0:
-            minute_process_time = time.time() - minute_process_start
-            target_time = 60.0 / speed  # 60 seconds for 1x speed
-            sleep_time = target_time - minute_process_time
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+                # Save figure
+                filename = f"unbalance_detection_{selected_label}_{timestamp_str}_window{window_idx}_row{start_idx}.png"
+                output_path = os.path.join(output_dir, filename)
+                fig.savefig(output_path, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+
+                print(f"      Figure saved: {output_path}")
+
+            # Simulate real-time processing speed if requested
+            if speed > 0:
+                window_process_time = time.time() - window_process_start
+                target_time = time_window_seconds / speed
+                sleep_time = target_time - window_process_time
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
+            window_idx += 1
+
+    except KeyboardInterrupt:
+        print(f"\n\n⚠️  Processing interrupted by user (Ctrl+C)")
+        print(f"Processed {window_idx} windows before interruption")
 
     # Print processing summary
     total_processing_time = time.time() - processing_start
     print(f"\n{'='*80}")
     print(f"Weighted Random Sampling Complete")
-    print(f"Total minutes processed: {minute_idx + 1}")
+    print(f"Total windows processed: {window_idx} ({time_window_seconds}s each)")
+    print(f"Total time analyzed: {window_idx * time_window_seconds / 60:.1f} minutes")
     print(f"Total unbalance detections: {total_detections}")
     print(f"\nDataset Selection Statistics:")
     for label in ['0E', '1E', '2E', '3E', '4E']:
         if label in dataset_selection_counts and dataset_selection_counts[label] > 0:
-            percentage = (dataset_selection_counts[label] / (minute_idx + 1)) * 100
+            percentage = (dataset_selection_counts[label] / window_idx) * 100 if window_idx > 0 else 0
             print(f"  {label}: {dataset_selection_counts[label]} times ({percentage:.1f}%)")
+
+    # Print rollover statistics if any occurred
+    total_rollovers = sum(dataset_rollover_counts.values())
+    if total_rollovers > 0:
+        print(f"\nDataset Rollover Statistics:")
+        for label in ['0E', '1E', '2E', '3E', '4E']:
+            if dataset_rollover_counts[label] > 0:
+                print(f"  {label}: {dataset_rollover_counts[label]} rollover(s)")
+
     print(f"\nTotal processing time: {total_processing_time:.2f} seconds")
     if speed > 0:
         print(f"Average speed: {speed:.2f}x real-time")
@@ -569,9 +607,9 @@ def process_with_weighted_sampling(model, data, output_dir, speed):
 
 
 def process_timeseries_data(model, data, output_dir='../../figures/detections',
-                           datasets='all', speed=1.0):
+                           datasets='all', speed=1.0, time_window_seconds=60, max_windows=None, normal_weight=0.9):
     """
-    Process evaluation data as timeseries with 1-minute windows.
+    Process evaluation data as timeseries with configurable time windows.
     Detect unbalance anomalies and save figures for detections.
 
     Args:
@@ -580,6 +618,9 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
         output_dir: Directory to save detection figures
         datasets: Which dataset(s) to process - 'all', '0E', '1E', '2E', '3E', or '4E'
         speed: Processing speed multiplier (1.0 = real-time, 0 = max speed)
+        time_window_seconds: Time window size in seconds (default: 60)
+        max_windows: Maximum number of windows to process (None = infinite with rollover)
+        normal_weight: Weight for 0E dataset in weighted random sampling (default: 0.9)
     """
     print(f"\n{'='*80}")
     print("Processing Evaluation Data as Timeseries")
@@ -595,11 +636,12 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
     if datasets.upper() == 'ALL':
         # When processing ALL datasets, use weighted random sampling
         print("Mode: Weighted Random Sampling")
-        print("  75% weight on 0E (no unbalance)")
-        print("  25% weight on 1E-4E (unbalanced, randomly selected)")
+        print(f"  {normal_weight*100:.0f}% weight on 0E (no unbalance)")
+        print(f"  {(1-normal_weight)*100:.0f}% weight on 1E-4E (unbalanced, randomly selected)")
+        print(f"  Time window: {time_window_seconds} seconds")
         print()
 
-        process_with_weighted_sampling(model, data, output_dir, speed)
+        process_with_weighted_sampling(model, data, output_dir, speed, time_window_seconds, max_windows, normal_weight)
         return
     else:
         # Process single dataset sequentially
@@ -613,16 +655,19 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
 
     # Display processing configuration
     print(f"Dataset(s): {', '.join(dataset_labels)}")
+    print(f"Time window: {time_window_seconds} seconds")
     if speed == 0:
         print(f"Speed: Maximum (no delays)")
     elif speed == 1.0:
-        print(f"Speed: Real-time (1 minute data = 60 seconds processing)")
+        print(f"Speed: Real-time ({time_window_seconds}s window = {time_window_seconds}s processing)")
     else:
         print(f"Speed: {speed}x real-time")
     print()
 
+    # Calculate time window in samples
+    time_window_samples = int(time_window_seconds * SAMPLES_PER_SECOND)
+
     total_detections = 0
-    start_time = datetime(2020, 1, 1, 0, 0, 0)  # Reference start time
     processing_start = time.time()
 
     for dataset_label, dataset_name in zip(dataset_labels, dataset_names):
@@ -633,41 +678,41 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
 
         print(f"Total samples: {total_samples:,}")
         print(f"Duration: {total_samples / SAMPLES_PER_SECOND / 60:.2f} minutes")
-        print(f"Processing in 1-minute windows ({MINUTE_WINDOW:,} samples each)...")
+        print(f"Processing in {time_window_seconds}s windows ({time_window_samples:,} samples each)...")
 
-        # Process in 1-minute chunks
-        n_minutes = int(np.floor(total_samples / MINUTE_WINDOW))
+        # Process in time window chunks
+        n_windows = int(np.floor(total_samples / time_window_samples))
 
-        for minute_idx in range(n_minutes):
-            minute_process_start = time.time()
+        for window_idx in range(n_windows):
+            window_process_start = time.time()
 
-            # Extract 1 minute of data
-            start_idx = minute_idx * MINUTE_WINDOW
-            end_idx = start_idx + MINUTE_WINDOW
-            minute_data = sensor_data[start_idx:end_idx]
+            # Extract time window of data
+            start_idx = window_idx * time_window_samples
+            end_idx = start_idx + time_window_samples
+            window_data = sensor_data[start_idx:end_idx]
 
-            # Split into 1-second windows (60 windows per minute)
-            n_windows = int(np.floor(len(minute_data) / WINDOW))
-            minute_data_windowed = minute_data[:n_windows * WINDOW].reshape((n_windows, WINDOW, 1))
+            # Split into 1-second windows for prediction
+            n_second_windows = int(np.floor(len(window_data) / WINDOW))
+            window_data_windowed = window_data[:n_second_windows * WINDOW].reshape((n_second_windows, WINDOW, 1))
 
-            # Predict on all windows in this minute
-            predictions = model.predict(minute_data_windowed, verbose=0)
+            # Predict on all 1-second windows in this time window
+            predictions = model.predict(window_data_windowed, verbose=0)
             predictions_binary = (predictions > UNBALANCE_THRESHOLD).astype(int).flatten()
 
             # Check if unbalance detected (majority voting)
             unbalance_detections = np.sum(predictions_binary)
             detection_ratio = unbalance_detections / len(predictions_binary)
 
-            # Calculate timestamp
-            current_time = start_time + timedelta(seconds=minute_idx * 60)
+            # Calculate timestamp (use system UTC time)
+            current_time = datetime.utcnow()
             timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
 
             # If significant unbalance detected (>50% of windows), save figure
             if detection_ratio > 0.5:
                 total_detections += 1
 
-                print(f"\n  ⚠️  UNBALANCE DETECTED at minute {minute_idx + 1}")
-                print(f"      Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"\n  ⚠️  UNBALANCE DETECTED at window {window_idx + 1}")
+                print(f"      Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
                 print(f"      Row index: {start_idx:,} - {end_idx:,}")
                 print(f"      Detection ratio: {detection_ratio*100:.1f}%")
                 print(f"      Mean prediction: {np.mean(predictions):.4f}")
@@ -675,24 +720,25 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
                 # Generate and save figure
                 fig = plt.figure(figsize=(15, 10))
 
-                # Plot 1: Full minute timeseries
+                # Plot 1: Full time window timeseries
                 ax1 = plt.subplot(3, 1, 1)
-                time_axis = np.arange(len(minute_data)) / SAMPLES_PER_SECOND
-                ax1.plot(time_axis, minute_data, lw=0.5)
+                time_axis = np.arange(len(window_data)) / SAMPLES_PER_SECOND
+                ax1.plot(time_axis, window_data, lw=0.5)
                 ax1.set_title(f"UNBALANCE DETECTED - Dataset {dataset_label} ({dataset_name})\n"
-                             f"Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} | "
-                             f"Rows: {start_idx:,}-{end_idx:,}", fontsize=14, fontweight='bold')
+                             f"Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC | "
+                             f"Rows: {start_idx:,}-{end_idx:,} | Window: {time_window_seconds}s",
+                             fontsize=14, fontweight='bold')
                 ax1.set_xlabel("Time (seconds)")
                 ax1.set_ylabel("Vibration Amplitude")
                 ax1.grid(True, alpha=0.3)
 
                 # Plot 2: Predictions over time
                 ax2 = plt.subplot(3, 1, 2)
-                window_times = np.arange(len(predictions))
-                ax2.plot(window_times, predictions, marker='o', markersize=3, linewidth=1)
+                pred_times = np.arange(len(predictions))
+                ax2.plot(pred_times, predictions, marker='o', markersize=3, linewidth=1)
                 ax2.axhline(y=UNBALANCE_THRESHOLD, color='r', linestyle='--',
                            label=f'Threshold ({UNBALANCE_THRESHOLD})')
-                ax2.fill_between(window_times, 0, 1, where=(predictions.flatten() > UNBALANCE_THRESHOLD),
+                ax2.fill_between(pred_times, 0, 1, where=(predictions.flatten() > UNBALANCE_THRESHOLD),
                                 alpha=0.3, color='red', label='Unbalance Detected')
                 ax2.set_title(f"Predictions per Second (Detection Ratio: {detection_ratio*100:.1f}%)")
                 ax2.set_xlabel("Second")
@@ -706,7 +752,7 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
                 max_pred_idx = np.argmax(predictions)
                 sample_start = max_pred_idx * WINDOW
                 sample_end = sample_start + WINDOW
-                sample_data = minute_data[sample_start:sample_end]
+                sample_data = window_data[sample_start:sample_end]
                 sample_time = np.arange(len(sample_data)) / SAMPLES_PER_SECOND
                 ax3.plot(sample_time, sample_data, lw=0.8)
                 ax3.set_title(f"Highest Prediction Window (Prediction: {predictions[max_pred_idx][0]:.4f})")
@@ -717,7 +763,7 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
                 plt.tight_layout()
 
                 # Save figure
-                filename = f"unbalance_detection_{dataset_label}_{timestamp_str}_row{start_idx}.png"
+                filename = f"unbalance_detection_{dataset_label}_{timestamp_str}_window{window_idx}_row{start_idx}.png"
                 output_path = os.path.join(output_dir, filename)
                 fig.savefig(output_path, dpi=150, bbox_inches='tight')
                 plt.close(fig)
@@ -726,9 +772,9 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
 
             # Simulate real-time processing speed if requested
             if speed > 0:
-                minute_process_time = time.time() - minute_process_start
-                target_time = 60.0 / speed  # 60 seconds for 1x speed
-                sleep_time = target_time - minute_process_time
+                window_process_time = time.time() - window_process_start
+                target_time = time_window_seconds / speed
+                sleep_time = target_time - window_process_time
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
@@ -765,6 +811,12 @@ Examples:
 
   # Use custom trained model
   python approach_1_cnn.py --dataset 2E --model-path /path/to/custom_model.h5
+
+  # Process exactly 100 windows then stop
+  python approach_1_cnn.py --dataset all --max-windows 100
+
+  # Infinite processing (runs forever with rollover, Ctrl+C to stop)
+  python approach_1_cnn.py --dataset all --speed 1.0
         """)
 
     parser.add_argument('--dataset', type=str, default='all',
@@ -772,7 +824,16 @@ Examples:
                        help='Dataset to evaluate: all, 0E (no unbalance), 1E, 2E, 3E, or 4E (max unbalance). Default: all')
 
     parser.add_argument('--speed', type=float, default=0,
-                       help='Processing speed multiplier. 0=maximum speed (no delays), 1.0=real-time (1 min data = 60s processing), 2.0=2x speed, etc. Default: 0 (max speed)')
+                       help='Processing speed multiplier. 0=maximum speed (no delays), 1.0=real-time, 2.0=2x speed, etc. Default: 0 (max speed)')
+
+    parser.add_argument('--time-window', type=int, default=60,
+                       help='Time window size in seconds for processing. Default: 60 (1 minute)')
+
+    parser.add_argument('--max-windows', type=int, default=None,
+                       help='Maximum number of windows to process. Default: None (infinite with rollover, Ctrl+C to stop)')
+
+    parser.add_argument('--normal-weight', type=float, default=0.9,
+                       help='Weight for normal (0E) dataset in weighted random sampling (0.0-1.0). Only applies when --dataset=all. Default: 0.9 (90%% normal, 10%% unbalanced)')
 
     parser.add_argument('--model-path', type=str,
                        default='../../models/reference/cnn_3_layers.h5',
@@ -794,6 +855,10 @@ Examples:
 
     print(f"\nConfiguration:")
     print(f"  Dataset: {args.dataset}")
+    if args.dataset.upper() == 'ALL':
+        print(f"  Normal Weight (0E): {args.normal_weight*100:.0f}%")
+    print(f"  Time Window: {args.time_window} seconds")
+    print(f"  Max Windows: {'Infinite (Ctrl+C to stop)' if args.max_windows is None else args.max_windows}")
     print(f"  Speed: {'Maximum' if args.speed == 0 else f'{args.speed}x real-time'}")
     print(f"  Model Path: {args.model_path}")
     print(f"  Output Directory: {args.output_dir}")
@@ -841,7 +906,10 @@ Examples:
     print("STEP 3: Real-time Anomaly Detection")
     print("=" * 80)
     process_timeseries_data(model, data, output_dir=args.output_dir,
-                           datasets=args.dataset, speed=args.speed)
+                           datasets=args.dataset, speed=args.speed,
+                           time_window_seconds=args.time_window,
+                           max_windows=args.max_windows,
+                           normal_weight=args.normal_weight)
 
     print("\n" + "=" * 80)
     print("Analysis Complete!")
@@ -850,7 +918,7 @@ Examples:
     if len(X_val) > 0:
         print(f"Validation Accuracy: {val_acc*100:.2f}%")
     print(f"Detection Threshold: {UNBALANCE_THRESHOLD}")
-    print(f"Window Size: 1 minute ({MINUTE_WINDOW:,} samples)")
+    print(f"Window Size: {args.time_window} seconds ({args.time_window * SAMPLES_PER_SECOND:,} samples)")
     print(f"\nCheck the {args.output_dir}/ directory for detected anomalies.")
 
 
