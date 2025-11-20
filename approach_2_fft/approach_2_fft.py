@@ -582,15 +582,15 @@ Examples:
                        help='Port for MCP server HTTP transport. Default: 8000')
 
     parser.add_argument('--model-path', type=str,
-                       default='../../models/reference/fft_fcn_4_layers.h5',
-                       help='Path to trained model file. Default: ../../models/reference/fft_fcn_4_layers.h5')
+                       default='../models/fft_fcn_4_layers.h5',
+                       help='Path to trained model file. Default: ../models/fft_fcn_4_layers.h5')
 
     parser.add_argument('--data-url', type=str,
                        default='../../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip',
                        help='Path or URL to dataset ZIP file')
 
-    parser.add_argument('--output-dir', type=str, default='../../figures/detections',
-                       help='Directory to save detection figures. Default: ../../figures/detections')
+    parser.add_argument('--output-dir', type=str, default='../figures/detections',
+                       help='Directory to save detection figures. Default: ../figures/detections')
 
     args = parser.parse_args()
 

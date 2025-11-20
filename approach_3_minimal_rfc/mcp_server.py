@@ -18,7 +18,7 @@ from fastmcp import FastMCP
 mcp = FastMCP("Minimal RFC Unbalance Detection Monitor")
 
 # Default paths (can be overridden)
-DETECTIONS_DIR = Path("../../figures/detections")
+DETECTIONS_DIR = Path("../figures/detections")
 DETECTIONS_LOG = None
 
 

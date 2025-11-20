@@ -510,11 +510,11 @@ Examples:
     parser.add_argument('--log-interval', type=int, default=10,
                         help='How often to print performance metrics in number of windows (default: 10)')
     parser.add_argument('--model-path', type=str,
-                        default='../../models/reference/minimal_rfc.joblib',
-                        help='Path to pre-trained RFC model (default: ../../models/reference/minimal_rfc.joblib)')
+                        default='../models/minimal_rfc.joblib',
+                        help='Path to pre-trained RFC model (default: ../models/minimal_rfc.joblib)')
     parser.add_argument('--output-dir', type=str,
-                        default='../../figures/detections',
-                        help='Directory to save detection figures (default: ../../figures/detections)')
+                        default='../figures/detections',
+                        help='Directory to save detection figures (default: ../figures/detections)')
     parser.add_argument('--enable-mcp', action='store_true',
                         help='Enable MCP server for real-time monitoring')
     parser.add_argument('--mcp-port', type=int, default=8000,
@@ -608,7 +608,7 @@ Examples:
     print("=" * 80)
 
     # Load data from ZIP file
-    data_zip_path = '../../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip'
+    data_zip_path = '../../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip'  # Still need to go up to parent
     data = load_data(data_zip_path, datasets_to_load=datasets_to_load)
     data_prepared = prepare_datasets_minimal(data)
 
