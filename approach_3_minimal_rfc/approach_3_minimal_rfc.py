@@ -35,6 +35,7 @@ from joblib import load
 # Add parent directory to path for utils
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.data_utils import load_data, SKIP_WARMUP, SAMPLES_PER_SECOND
+from utils.redis_client import RedisConfig, WindowConsumer
 
 # Constants
 WINDOW = 4096  # Samples per second (1 second windows for feature extraction)
@@ -475,6 +476,313 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
     print(f"{'='*80}")
 
 
+def process_from_redis(model, data, output_dir, redis_config,
+                      stream_name='windows', consumer_group='detectors',
+                      consumer_name='rfc', log_interval=10):
+    """
+    Process windows from Redis stream for synchronized detection with minimal feature extraction.
+
+    Args:
+        model: Pre-trained Random Forest Classifier
+        data: Dictionary of {label: DataFrame}
+        output_dir: Directory to save detection figures
+        redis_config: RedisConfig instance
+        stream_name: Redis stream name
+        consumer_group: Consumer group name
+        consumer_name: Consumer name for this approach
+        log_interval: Log metrics to console every N windows
+    """
+    print(f"\n{'='*80}")
+    print("Redis Consumer Mode - Synchronized Window Processing")
+    print(f"{'='*80}")
+    print(f"Stream: {stream_name}")
+    print(f"Consumer Group: {consumer_group}")
+    print(f"Consumer Name: {consumer_name}")
+    print(f"Log Interval: {log_interval} windows")
+    print()
+
+    # Initialize Redis consumer
+    consumer = WindowConsumer(redis_config, stream_name, consumer_group, consumer_name)
+
+    # Wait for stream to be created by coordinator
+    print("Waiting for Redis stream to be created by data coordinator...")
+    if not consumer.wait_for_stream(timeout_s=30):
+        print("❌ Timeout waiting for stream. Make sure data_coordinator.py is running.")
+        return
+
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Create timestamped report filename
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    report_filename = os.path.join(output_dir, f"performance_report_{timestamp}.txt")
+
+    # Track performance metrics per dataset
+    dataset_stats = {'0E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0, 'total': 0},
+                     '1E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0, 'total': 0},
+                     '2E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0, 'total': 0},
+                     '3E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0, 'total': 0},
+                     '4E': {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0, 'total': 0}}
+
+    # Track total detections
+    total_detections = 0
+
+    # Log file for detections (JSONL format for MCP server)
+    detections_log = os.path.join(output_dir, "detections.jsonl")
+
+    print(f"Performance report: {report_filename}")
+    print(f"Updating report every {log_interval} windows\n")
+
+    # Performance tracking
+    start_time = time.time()
+    window_idx = 0
+
+    print(f"✓ Connected and ready to process windows")
+    print(f"Waiting for windows from data coordinator...")
+    print(f"(Press Ctrl+C to stop)\n")
+
+    try:
+        while True:
+            # Read next window from Redis (blocking)
+            window_msg = consumer.read_window(block_ms=5000)
+
+            if window_msg is None:
+                # Timeout - no new messages, continue waiting
+                continue
+
+            # Extract window information
+            dataset_label = window_msg['dataset']
+            start_idx = window_msg['start_idx']
+            end_idx = window_msg['end_idx']
+            redis_timestamp = window_msg['timestamp']
+
+            # Get window data
+            if dataset_label not in data:
+                print(f"⚠️  Warning: Dataset {dataset_label} not loaded, skipping")
+                consumer.acknowledge(window_msg['message_id'])
+                continue
+
+            # Extract the time window
+            # Select columns: Measured_RPM (index 1) and Vibration_1/2/3 (indices 2-4)
+            # Skip V_in (index 0)
+            window_data = data[dataset_label].iloc[start_idx:end_idx, 1:].values
+
+            # Extract 1-second windows for feature extraction
+            n_second_windows = len(window_data) // WINDOW
+            if n_second_windows == 0:
+                print(f"⚠️  Warning: Window too small ({len(window_data)} samples), skipping")
+                consumer.acknowledge(window_msg['message_id'])
+                continue
+
+            window_data_windowed = window_data[:n_second_windows * WINDOW].reshape(n_second_windows, WINDOW, 4)
+
+            # Extract minimal features for each 1-second window
+            window_features = np.array([extract_minimal_features(w) for w in window_data_windowed])
+
+            # Predict on all 1-second windows
+            predictions = model.predict_proba(window_features)[:, 1]  # Probability of class 1 (unbalance)
+
+            # Detection logic: majority voting
+            detection_ratio = np.mean(predictions > UNBALANCE_THRESHOLD)
+
+            # Get current UTC time
+            current_time = datetime.now(timezone.utc)
+            selected_name = DATASET_NAMES.get(dataset_label, dataset_label)
+
+            # Determine if unbalance detected
+            if detection_ratio > 0.5:
+                total_detections += 1
+
+                print(f"\n  ⚠️  UNBALANCE DETECTED at window {window_idx}")
+                print(f"      Source: {dataset_label} ({selected_name})")
+                print(f"      Timestamp: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                print(f"      Row index: {start_idx:,} - {end_idx:,}")
+                print(f"      Detection ratio: {detection_ratio*100:.1f}%")
+                print(f"      Mean prediction: {np.mean(predictions):.4f}")
+
+                # Create detection figure
+                fig, axes = plt.subplots(4, 1, figsize=(12, 10))
+                time_window_seconds = len(window_data) / SAMPLES_PER_SECOND
+                fig.suptitle(f'Unbalance Detection - {dataset_label} ({selected_name})\n'
+                             f'Window {window_idx} | Rows {start_idx:,}-{end_idx:,} | '
+                             f'{current_time.strftime("%Y-%m-%d %H:%M:%S")} UTC',
+                             fontsize=14, fontweight='bold')
+
+                # Plot 1: RPM over time
+                time_axis = np.arange(len(window_data)) / SAMPLES_PER_SECOND
+                axes[0].plot(time_axis, window_data[:, 0], lw=0.5, color='blue')
+                axes[0].set_ylabel('RPM')
+                axes[0].set_title('RPM Over Time')
+                axes[0].grid(True, alpha=0.3)
+
+                # Plot 2-4: Vibration sensors
+                sensor_labels = ['Vibration Sensor 1', 'Vibration Sensor 2', 'Vibration Sensor 3']
+                colors = ['green', 'orange', 'red']
+                for i, (label, color) in enumerate(zip(sensor_labels, colors), start=1):
+                    axes[i].plot(time_axis, window_data[:, i], lw=0.5, color=color)
+                    axes[i].set_ylabel('Amplitude')
+                    axes[i].set_title(label)
+                    axes[i].grid(True, alpha=0.3)
+
+                axes[-1].set_xlabel('Time (seconds)')
+                plt.tight_layout()
+
+                # Save figure
+                timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
+                filename = f"unbalance_detection_{dataset_label}_{timestamp_str}_window{window_idx}_row{start_idx}.png"
+                output_path = os.path.join(output_dir, filename)
+                fig.savefig(output_path, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+
+                print(f"      Figure saved: {output_path}")
+
+                # Log detection event to JSONL file
+                detection_event = {
+                    'timestamp': current_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'window_idx': window_idx,
+                    'dataset': dataset_label,
+                    'dataset_name': selected_name,
+                    'start_idx': start_idx,
+                    'end_idx': end_idx,
+                    'detection_ratio': detection_ratio if isinstance(detection_ratio, (int, float)) else detection_ratio.item(),
+                    'mean_prediction': np.mean(predictions).item() if hasattr(np.mean(predictions), 'item') else float(np.mean(predictions)),
+                    'max_prediction': np.max(predictions).item() if hasattr(np.max(predictions), 'item') else float(np.max(predictions)),
+                    'figure_file': filename
+                }
+                with open(detections_log, 'a') as f:
+                    f.write(json.dumps(detection_event) + '\n')
+
+            # Track performance metrics
+            ground_truth_positive = dataset_label != '0E'
+            predicted_positive = detection_ratio > 0.5
+
+            if ground_truth_positive and predicted_positive:
+                dataset_stats[dataset_label]['TP'] += 1
+            elif ground_truth_positive and not predicted_positive:
+                dataset_stats[dataset_label]['FN'] += 1
+            elif not ground_truth_positive and predicted_positive:
+                dataset_stats[dataset_label]['FP'] += 1
+            else:
+                dataset_stats[dataset_label]['TN'] += 1
+
+            dataset_stats[dataset_label]['total'] += 1
+
+            # Acknowledge message
+            consumer.acknowledge(window_msg['message_id'])
+
+            # Log running metrics every N windows
+            if (window_idx + 1) % log_interval == 0:
+                elapsed_time = time.time() - start_time
+                print(f"\n{'='*80}")
+                print(f"Running Performance Metrics (after {window_idx + 1} windows, {elapsed_time:.1f}s elapsed)")
+                print(f"{'='*80}")
+                print(f"{'Dataset':<10} {'Processed':<10} {'TP':<6} {'FP':<6} {'TN':<6} {'FN':<6} {'Accuracy':<8}")
+                print(f"{'-'*80}")
+
+                overall_tp, overall_fp, overall_tn, overall_fn = 0, 0, 0, 0
+
+                for label in sorted(dataset_stats.keys()):
+                    stats = dataset_stats[label]
+                    total = stats['total']
+                    if total > 0:
+                        accuracy = (stats['TP'] + stats['TN']) / total
+                        print(f"{label:<10} {total:<10} {stats['TP']:<6} {stats['FP']:<6} {stats['TN']:<6} {stats['FN']:<6} {accuracy:<8.3f}")
+                        overall_tp += stats['TP']
+                        overall_fp += stats['FP']
+                        overall_tn += stats['TN']
+                        overall_fn += stats['FN']
+
+                overall_total = overall_tp + overall_fp + overall_tn + overall_fn
+                if overall_total > 0:
+                    overall_accuracy = (overall_tp + overall_tn) / overall_total
+                    print(f"{'-'*80}")
+                    print(f"{'Overall':<10} {overall_total:<10} {overall_tp:<6} {overall_fp:<6} {overall_tn:<6} {overall_fn:<6} {overall_accuracy:<8.3f}")
+                print(f"{'='*80}\n")
+
+                # Write performance report to file
+                with open(report_filename, 'w') as f:
+                    f.write(f"{'='*80}\n")
+                    f.write(f"Performance Metrics - Minimal RFC Approach (Redis Consumer Mode)\n")
+                    f.write(f"{'='*80}\n")
+                    f.write(f"{'Dataset':<10} {'Total':<8} {'TP':<8} {'FP':<8} {'TN':<8} {'FN':<8} {'Accuracy':<10} {'Precision':<10} {'Recall':<10}\n")
+                    f.write(f"{'-'*80}\n")
+
+                    for label in sorted(dataset_stats.keys()):
+                        stats = dataset_stats[label]
+                        total = stats['total']
+                        if total > 0:
+                            accuracy = (stats['TP'] + stats['TN']) / total
+                            precision = stats['TP'] / (stats['TP'] + stats['FP']) if (stats['TP'] + stats['FP']) > 0 else 0.0
+                            recall = stats['TP'] / (stats['TP'] + stats['FN']) if (stats['TP'] + stats['FN']) > 0 else 0.0
+
+                            f.write(f"{label:<10} {total:<8} {stats['TP']:<8} {stats['FP']:<8} {stats['TN']:<8} {stats['FN']:<8} "
+                                    f"{accuracy:<10.3f} {precision:<10.3f} {recall:<10.3f}\n")
+
+                    # Write overall metrics
+                    overall_total = overall_tp + overall_fp + overall_tn + overall_fn
+                    if overall_total > 0:
+                        overall_accuracy = (overall_tp + overall_tn) / overall_total
+                        overall_precision = overall_tp / (overall_tp + overall_fp) if (overall_tp + overall_fp) > 0 else 0.0
+                        overall_recall = overall_tp / (overall_tp + overall_fn) if (overall_tp + overall_fn) > 0 else 0.0
+                        f.write(f"{'-'*80}\n")
+                        f.write(f"{'Overall':<10} {overall_total:<8} {overall_tp:<8} {overall_fp:<8} {overall_tn:<8} {overall_fn:<8} "
+                                f"{overall_accuracy:<10.3f} {overall_precision:<10.3f} {overall_recall:<10.3f}\n")
+
+            window_idx += 1
+
+    except KeyboardInterrupt:
+        print(f"\n\n⚠️  Processing interrupted by user (Ctrl+C)")
+        print(f"Processed {window_idx} windows before interruption")
+
+    # Final summary
+    total_processing_time = time.time() - start_time
+    print(f"\n{'='*80}")
+    print(f"Redis Consumer Processing Complete")
+    print(f"{'='*80}")
+    print(f"Total windows processed: {window_idx}")
+    print(f"Total unbalance detections: {total_detections}")
+    print(f"Total processing time: {total_processing_time:.2f} seconds")
+
+    # Final performance metrics
+    print(f"\n{'='*80}")
+    print(f"Performance Metrics")
+    print(f"{'='*80}")
+    print(f"{'Dataset':<10} {'Total':<8} {'TP':<8} {'FP':<8} {'TN':<8} {'FN':<8} {'Accuracy':<10} {'Precision':<10} {'Recall':<10}")
+    print(f"{'-'*80}")
+
+    for label in sorted(dataset_stats.keys()):
+        stats = dataset_stats[label]
+        total = stats['total']
+        if total > 0:
+            accuracy = (stats['TP'] + stats['TN']) / total
+            precision = stats['TP'] / (stats['TP'] + stats['FP']) if (stats['TP'] + stats['FP']) > 0 else 0.0
+            recall = stats['TP'] / (stats['TP'] + stats['FN']) if (stats['TP'] + stats['FN']) > 0 else 0.0
+
+            print(f"{label:<10} {total:<8} {stats['TP']:<8} {stats['FP']:<8} {stats['TN']:<8} {stats['FN']:<8} "
+                  f"{accuracy:<10.3f} {precision:<10.3f} {recall:<10.3f}")
+
+    # Overall metrics
+    overall_tp = sum(s['TP'] for s in dataset_stats.values())
+    overall_fp = sum(s['FP'] for s in dataset_stats.values())
+    overall_tn = sum(s['TN'] for s in dataset_stats.values())
+    overall_fn = sum(s['FN'] for s in dataset_stats.values())
+    overall_total = sum(s['total'] for s in dataset_stats.values())
+
+    if overall_total > 0:
+        overall_accuracy = (overall_tp + overall_tn) / overall_total
+        overall_precision = overall_tp / (overall_tp + overall_fp) if (overall_tp + overall_fp) > 0 else 0.0
+        overall_recall = overall_tp / (overall_tp + overall_fn) if (overall_tp + overall_fn) > 0 else 0.0
+        print(f"{'-'*80}")
+        print(f"{'Overall':<10} {overall_total:<8} {overall_tp:<8} {overall_fp:<8} {overall_tn:<8} {overall_fn:<8} "
+              f"{overall_accuracy:<10.3f} {overall_precision:<10.3f} {overall_recall:<10.3f}")
+
+    print(f"\nDetection figures saved to: {output_dir}")
+    print(f"Performance report saved to: {report_filename}")
+    print(f"{'='*80}")
+
+    consumer.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Approach 3: Random Forest Classifier on Minimal Statistical Features for Unbalance Detection',
@@ -519,6 +827,20 @@ Examples:
                         help='Enable MCP server for real-time monitoring')
     parser.add_argument('--mcp-port', type=int, default=8000,
                         help='Port for MCP server (default: 8000)')
+
+    # Redis synchronization arguments
+    parser.add_argument('--redis-mode', action='store_true',
+                       help='Enable Redis consumer mode for synchronized processing')
+    parser.add_argument('--redis-host', type=str, default=None,
+                       help='Redis host (default: localhost or REDIS_HOST env var)')
+    parser.add_argument('--redis-port', type=int, default=None,
+                       help='Redis port (default: 6379 or REDIS_PORT env var)')
+    parser.add_argument('--redis-stream', type=str, default='windows',
+                       help='Redis stream name (default: windows)')
+    parser.add_argument('--consumer-group', type=str, default='detectors',
+                       help='Redis consumer group (default: detectors)')
+    parser.add_argument('--consumer-name', type=str, default='rfc',
+                       help='Consumer name for this approach (default: rfc)')
 
     args = parser.parse_args()
 
@@ -612,21 +934,45 @@ Examples:
     data = load_data(data_zip_path, datasets_to_load=datasets_to_load)
     data_prepared = prepare_datasets_minimal(data)
 
-    # STEP 4: Process with weighted random sampling
+    # STEP 4: Process data
     print("\n" + "=" * 80)
-    print(f"STEP {'4' if args.dataset == 'all' else '3'}: Process Data with Weighted Random Sampling")
+    print(f"STEP {'4' if args.dataset == 'all' else '3'}: Real-time Unbalance Detection")
     print("=" * 80)
 
-    process_with_weighted_sampling(
-        model=model,
-        data=data_prepared,
-        output_dir=args.output_dir,
-        speed=args.speed,
-        time_window_seconds=args.time_window,
-        max_windows=args.max_windows,
-        normal_weight=args.normal_weight,
-        log_interval=args.log_interval
-    )
+    if args.redis_mode:
+        # Redis consumer mode - synchronized processing
+        print("Mode: Redis Consumer (Synchronized)")
+        print(f"  Redis Stream: {args.redis_stream}")
+        print(f"  Consumer Group: {args.consumer_group}")
+        print(f"  Consumer Name: {args.consumer_name}")
+        print()
+
+        redis_config = RedisConfig(host=args.redis_host, port=args.redis_port)
+        process_from_redis(
+            model=model,
+            data=data_prepared,
+            output_dir=args.output_dir,
+            redis_config=redis_config,
+            stream_name=args.redis_stream,
+            consumer_group=args.consumer_group,
+            consumer_name=args.consumer_name,
+            log_interval=args.log_interval
+        )
+    else:
+        # Standalone mode - weighted random sampling
+        print("Mode: Standalone (Weighted Random Sampling)")
+        print()
+
+        process_with_weighted_sampling(
+            model=model,
+            data=data_prepared,
+            output_dir=args.output_dir,
+            speed=args.speed,
+            time_window_seconds=args.time_window,
+            max_windows=args.max_windows,
+            normal_weight=args.normal_weight,
+            log_interval=args.log_interval
+        )
 
 
 if __name__ == "__main__":

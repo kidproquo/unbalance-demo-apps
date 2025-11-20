@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  # Redis service for coordinating window processing
+  redis:
+    image: redis:7-alpine
+    container_name: unbalance-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - unbalance-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Data coordinator - publishes windows to Redis stream
+  coordinator:
+    build: .
+    container_name: unbalance-coordinator
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    command: >
+      python -u data_coordinator.py
+      --max-windows 100
+      --time-window 10
+      --normal-weight 0.9
+      --redis-host redis
+      --redis-stream windows
+    volumes:
+      - ../data:/app/data:ro
+      - ./figures:/app/figures
+    networks:
+      - unbalance-net
+
+  # Approach 1: CNN on Raw Sensor Data
+  approach-cnn:
+    build: .
+    container_name: unbalance-cnn
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    command: >
+      python -u approach_1_cnn/approach_1_cnn.py
+      --redis-mode
+      --redis-host redis
+      --redis-stream windows
+      --consumer-group detectors
+      --consumer-name cnn
+      --log-interval 10
+      --dataset all
+    volumes:
+      - ../data:/app/data:ro
+      - ./figures/detections:/app/figures/detections
+    networks:
+      - unbalance-net
+
+  # Approach 2: FFT FCN on Frequency-transformed Data
+  approach-fft:
+    build: .
+    container_name: unbalance-fft
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    command: >
+      python -u approach_2_fft/approach_2_fft.py
+      --redis-mode
+      --redis-host redis
+      --redis-stream windows
+      --consumer-group detectors
+      --consumer-name fft
+      --log-interval 10
+      --dataset all
+    volumes:
+      - ../data:/app/data:ro
+      - ./figures/detections:/app/figures/detections
+    networks:
+      - unbalance-net
+
+  # Approach 3: Random Forest on Minimal Features
+  approach-rfc:
+    build: .
+    container_name: unbalance-rfc
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    command: >
+      python -u approach_3_minimal_rfc/approach_3_minimal_rfc.py
+      --redis-mode
+      --redis-host redis
+      --redis-stream windows
+      --consumer-group detectors
+      --consumer-name rfc
+      --log-interval 10
+      --dataset all
+    volumes:
+      - ../data:/app/data:ro
+      - ./figures/detections:/app/figures/detections
+    networks:
+      - unbalance-net
+
+networks:
+  unbalance-net:
+    driver: bridge
+
+# Usage:
+#   Build: docker-compose build
+#   Run:   docker-compose up
+#   Stop:  docker-compose down
+#
+# All three approaches will process the same windows published by the coordinator,
+# allowing for direct performance comparison on identical data.
