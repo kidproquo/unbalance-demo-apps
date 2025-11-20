@@ -24,28 +24,28 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy shared utilities first (for better layer caching)
-COPY utils/ /app/utils/
-
-# Copy models
-COPY models/ /app/models/
-
 # Create data and output directories
 RUN mkdir -p /app/data /app/figures/detections
 
-# Install Python dependencies for all approaches
-# We'll install all dependencies in one image for simplicity
+# Install Python dependencies FIRST (for better layer caching)
+# Copy only requirements.txt files first - they change less frequently
 COPY approach_1_cnn/requirements.txt /tmp/requirements_cnn.txt
 COPY approach_2_fft/requirements.txt /tmp/requirements_fft.txt
 COPY approach_3_minimal_rfc/requirements.txt /tmp/requirements_rfc.txt
 
-# Install dependencies (will install from all three but duplicates will be skipped)
+# Install dependencies (expensive operation - cache this layer)
 RUN pip install --no-cache-dir -r /tmp/requirements_cnn.txt && \
     pip install --no-cache-dir -r /tmp/requirements_fft.txt && \
     pip install --no-cache-dir -r /tmp/requirements_rfc.txt && \
     rm /tmp/requirements_*.txt
 
-# Copy application code
+# Copy models (large files, change occasionally)
+COPY models/ /app/models/
+
+# Copy shared utilities (change occasionally)
+COPY utils/ /app/utils/
+
+# Copy application code (changes frequently - copy last)
 COPY approach_1_cnn/ /app/approach_1_cnn/
 COPY approach_2_fft/ /app/approach_2_fft/
 COPY approach_3_minimal_rfc/ /app/approach_3_minimal_rfc/
