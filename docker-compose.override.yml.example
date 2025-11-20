@@ -1,0 +1,28 @@
+# docker-compose.override.yml.example
+#
+# Copy this file to docker-compose.override.yml for local development
+# The override file is automatically applied by docker-compose
+#
+# Usage:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker-compose up --build
+
+version: '3.8'
+
+services:
+  # Override to build locally instead of pulling from registry
+  coordinator:
+    build: .
+    image: unbalanced-demo-apps:local
+
+  approach-cnn:
+    build: .
+    image: unbalanced-demo-apps:local
+
+  approach-fft:
+    build: .
+    image: unbalanced-demo-apps:local
+
+  approach-rfc:
+    build: .
+    image: unbalanced-demo-apps:local

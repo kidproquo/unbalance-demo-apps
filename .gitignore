@@ -131,3 +131,6 @@ dmypy.json
 *.swp
 *.log
 *.out
+
+# Docker
+docker-compose.override.yml

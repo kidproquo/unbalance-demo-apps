@@ -17,7 +17,9 @@ services:
 
   # Data coordinator - publishes windows to Redis stream
   coordinator:
-    build: .
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    # For local development, uncomment to build from source:
+    # build: .
     container_name: unbalance-coordinator
     depends_on:
       redis:
@@ -29,7 +31,7 @@ services:
     command: >
       python -u data_coordinator.py
       --max-windows 100
-      --time-window 10
+      --time-window 1
       --normal-weight 0.9
       --redis-host redis
       --redis-stream windows
@@ -41,7 +43,9 @@ services:
 
   # Approach 1: CNN on Raw Sensor Data
   approach-cnn:
-    build: .
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    # For local development, uncomment to build from source:
+    # build: .
     container_name: unbalance-cnn
     depends_on:
       redis:
@@ -50,6 +54,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - PYTHONUNBUFFERED=1
+    ports:
+      - "12001:8000"
     command: >
       python -u approach_1_cnn/approach_1_cnn.py
       --redis-mode
@@ -59,6 +65,10 @@ services:
       --consumer-name cnn
       --log-interval 10
       --dataset all
+      --time-window 1
+      --speed 1.0
+      --enable-mcp
+      --mcp-port 8000
     volumes:
       - ../data:/app/data:ro
       - ./figures/detections:/app/figures/detections
@@ -67,7 +77,9 @@ services:
 
   # Approach 2: FFT FCN on Frequency-transformed Data
   approach-fft:
-    build: .
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    # For local development, uncomment to build from source:
+    # build: .
     container_name: unbalance-fft
     depends_on:
       redis:
@@ -76,6 +88,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - PYTHONUNBUFFERED=1
+    ports:
+      - "12002:8000"
     command: >
       python -u approach_2_fft/approach_2_fft.py
       --redis-mode
@@ -85,6 +99,10 @@ services:
       --consumer-name fft
       --log-interval 10
       --dataset all
+      --time-window 1
+      --speed 1.0
+      --enable-mcp
+      --mcp-port 8000
     volumes:
       - ../data:/app/data:ro
       - ./figures/detections:/app/figures/detections
@@ -93,7 +111,9 @@ services:
 
   # Approach 3: Random Forest on Minimal Features
   approach-rfc:
-    build: .
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    # For local development, uncomment to build from source:
+    # build: .
     container_name: unbalance-rfc
     depends_on:
       redis:
@@ -102,6 +122,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - PYTHONUNBUFFERED=1
+    ports:
+      - "12003:8000"
     command: >
       python -u approach_3_minimal_rfc/approach_3_minimal_rfc.py
       --redis-mode
@@ -111,6 +133,10 @@ services:
       --consumer-name rfc
       --log-interval 10
       --dataset all
+      --time-window 1
+      --speed 1.0
+      --enable-mcp
+      --mcp-port 8000
     volumes:
       - ../data:/app/data:ro
       - ./figures/detections:/app/figures/detections
@@ -122,9 +148,26 @@ networks:
     driver: bridge
 
 # Usage:
-#   Build: docker-compose build
-#   Run:   docker-compose up
-#   Stop:  docker-compose down
+#   Pull images:  docker-compose pull
+#   Run:          docker-compose up
+#   Stop:         docker-compose down
+#
+# For local development with custom builds:
+#   1. Uncomment "build: ." in each service
+#   2. Comment out "image: ..." lines
+#   3. Build:     docker-compose build
+#   4. Run:       docker-compose up
+#
+# To use a specific version instead of :latest:
+#   Replace "latest" with version tag (e.g., "v0.1.0")
+#
+# Configuration:
+#   - Time window: 1 second
+#   - Speed: 1.0x (real-time)
+#   - MCP servers enabled on ports:
+#     * CNN: http://localhost:12001/sse
+#     * FFT: http://localhost:12002/sse
+#     * RFC: http://localhost:12003/sse
 #
 # All three approaches will process the same windows published by the coordinator,
 # allowing for direct performance comparison on identical data.
