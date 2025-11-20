@@ -71,6 +71,7 @@ services:
       --enable-mcp
       --mcp-port 8000
       --model-path /app/models/cnn_3_layers.h5
+      --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
       --output-dir /app/outputs/cnn
     volumes:
       - ../data:/app/data:ro
@@ -108,6 +109,7 @@ services:
       --enable-mcp
       --mcp-port 8000
       --model-path /app/models/fft_fcn_4_layers.h5
+      --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
       --output-dir /app/outputs/fft
     volumes:
       - ../data:/app/data:ro
@@ -145,6 +147,7 @@ services:
       --enable-mcp
       --mcp-port 8000
       --model-path /app/models/minimal_rfc.joblib
+      --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
       --output-dir /app/outputs/rfc
     volumes:
       - ../data:/app/data:ro

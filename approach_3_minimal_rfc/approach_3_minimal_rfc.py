@@ -820,6 +820,9 @@ Examples:
     parser.add_argument('--model-path', type=str,
                         default='../models/minimal_rfc.joblib',
                         help='Path to pre-trained RFC model (default: ../models/minimal_rfc.joblib)')
+    parser.add_argument('--data-url', type=str,
+                        default='../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip',
+                        help='Path or URL to dataset ZIP file')
     parser.add_argument('--output-dir', type=str,
                         default='../figures/detections',
                         help='Directory to save detection figures (default: ../figures/detections)')
@@ -930,7 +933,7 @@ Examples:
     print("=" * 80)
 
     # Load data from ZIP file
-    data_zip_path = '../data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip'
+    data_zip_path = args.data_url
     data = load_data(data_zip_path, datasets_to_load=datasets_to_load)
     data_prepared = prepare_datasets_minimal(data)
 
