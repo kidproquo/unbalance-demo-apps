@@ -47,6 +47,40 @@ Install the required dependencies:
 pip install -r requirements.txt
 ```
 
+## MCP Server (Optional)
+
+An MCP (Model Context Protocol) server is available for real-time monitoring and querying of the detection system's performance metrics and detection events.
+
+**Integrated Mode (Recommended):**
+
+```bash
+# Install fastmcp
+pip install fastmcp
+
+# Run with MCP server enabled (runs in background thread with HTTP/SSE on port 8000)
+python approach_1_cnn.py --dataset all --enable-mcp
+
+# Custom port
+python approach_1_cnn.py --dataset all --enable-mcp --mcp-port 8080
+```
+
+**Standalone Mode:**
+
+```bash
+# Run the MCP server separately (in a different terminal)
+python mcp_server.py
+```
+
+**Features:**
+- HTTP/SSE transport for easy integration with web apps and clients
+- Query current performance metrics (TP/FP/TN/FN, Accuracy, Precision, Recall)
+- Get recent unbalance detection events
+- Check system status and running state
+- Real-time monitoring while processing data in a loop
+- Accessible at `http://localhost:8000/sse` (or custom port)
+
+**See [MCP_SERVER.md](MCP_SERVER.md) for detailed documentation and integration with Claude Desktop.**
+
 ## Usage
 
 ### Basic Usage
@@ -98,12 +132,22 @@ Options:
                         - 0.5: 50% normal, 50% unbalanced
                         - Range: 0.0-1.0
 
-  --log-interval INT    Log performance metrics to console and write to CSV every N windows (default: 10)
-                        - 10: Log/write every 10 windows (default)
-                        - 1: Log/write after every window (verbose, real-time)
-                        - 60: Log/write every 60 windows (if window=1s, this is every minute)
-                        - 100: Log/write every 100 windows (less frequent updates)
-                        - Note: Both console logging and CSV writing happen at the same interval
+  --log-interval INT    Log performance metrics to console every N windows (default: 10)
+                        - 10: Log every 10 windows (default)
+                        - 1: Log after every window (verbose, real-time)
+                        - 60: Log every 60 windows (if window=1s, this is every minute)
+                        - 100: Log every 100 windows (less frequent updates)
+
+  --enable-mcp          Enable MCP server for real-time monitoring
+                        - Runs MCP server in background thread
+                        - Uses HTTP/SSE transport (default port: 8000)
+                        - Allows querying metrics and detections while processing
+                        - Requires: pip install fastmcp
+                        - See MCP_SERVER.md for details
+
+  --mcp-port INT        Port for MCP server HTTP transport (default: 8000)
+                        - Only used when --enable-mcp is set
+                        - HTTP/SSE endpoint: http://localhost:<port>/sse
 
   --model-path PATH     Path to trained model file
                         (default: ../../models/reference/cnn_3_layers.h5)
@@ -161,6 +205,12 @@ python approach_1_cnn.py --dataset all --max-windows 50 --log-interval 1
 
 # Log metrics every 100 windows (less console output)
 python approach_1_cnn.py --dataset all --log-interval 100
+
+# Enable MCP server for real-time monitoring while processing (HTTP on port 8000)
+python approach_1_cnn.py --dataset all --enable-mcp
+
+# Enable MCP server on custom port
+python approach_1_cnn.py --dataset all --enable-mcp --mcp-port 8080
 
 # View help
 python approach_1_cnn.py --help

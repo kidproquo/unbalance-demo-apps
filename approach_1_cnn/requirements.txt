@@ -19,3 +19,13 @@ scikit-learn>=0.24.0,<2.0.0
 
 # Visualization
 matplotlib>=3.4.0,<4.0.0
+
+# MCP Server (optional - for real-time monitoring)
+# Enable with: python approach_1_cnn.py --enable-mcp
+fastmcp>=2.0.0
+mcp>=1.0.0
+uvicorn>=0.38.0
+starlette>=0.50.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+httpx>=0.28.0

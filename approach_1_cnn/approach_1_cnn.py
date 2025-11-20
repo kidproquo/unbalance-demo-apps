@@ -28,6 +28,8 @@ from matplotlib.colors import LogNorm
 import os
 import argparse
 import time
+import json
+import threading
 from sklearn.model_selection import train_test_split
 from scipy.stats import mode
 
@@ -537,6 +539,23 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
 
                 print(f"      Figure saved: {output_path}")
 
+                # Log detection event to JSONL file for MCP server
+                detections_log = os.path.join(output_dir, "detections.jsonl")
+                detection_event = {
+                    'timestamp': current_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'window_idx': window_idx,
+                    'dataset': selected_label,
+                    'dataset_name': selected_name,
+                    'start_idx': start_idx,
+                    'end_idx': end_idx,
+                    'detection_ratio': float(detection_ratio),
+                    'mean_prediction': float(np.mean(predictions)),
+                    'max_prediction': float(np.max(predictions)),
+                    'figure_file': filename
+                }
+                with open(detections_log, 'a') as f:
+                    f.write(json.dumps(detection_event) + '\n')
+
             # Track performance metrics
             # Ground truth: 0E = negative (no unbalance), 1E-4E = positive (unbalance)
             ground_truth_positive = selected_label != '0E'  # True if 1E-4E
@@ -960,6 +979,12 @@ Examples:
     parser.add_argument('--log-interval', type=int, default=10,
                        help='Log performance metrics to console every N windows. Default: 10')
 
+    parser.add_argument('--enable-mcp', action='store_true',
+                       help='Enable MCP server for real-time monitoring queries. Runs in background thread with HTTP transport.')
+
+    parser.add_argument('--mcp-port', type=int, default=8000,
+                       help='Port for MCP server HTTP transport. Default: 8000')
+
     parser.add_argument('--model-path', type=str,
                        default='../../models/reference/cnn_3_layers.h5',
                        help='Path to trained model file. Default: ../../models/reference/cnn_3_layers.h5')
@@ -987,7 +1012,32 @@ Examples:
     print(f"  Speed: {'Maximum' if args.speed == 0 else f'{args.speed}x real-time'}")
     print(f"  Model Path: {args.model_path}")
     print(f"  Output Directory: {args.output_dir}")
+    print(f"  MCP Server: {'Enabled' if args.enable_mcp else 'Disabled'}")
     print()
+
+    # Start MCP server in background thread if enabled
+    mcp_thread = None
+    if args.enable_mcp:
+        try:
+            from mcp_server import run_mcp_server, set_detections_dir
+            # Set the output directory for MCP server
+            set_detections_dir(args.output_dir)
+            mcp_thread = threading.Thread(
+                target=lambda: run_mcp_server(transport="sse", port=args.mcp_port),
+                daemon=True
+            )
+            mcp_thread.start()
+            print("✓ MCP server started in background thread")
+            print(f"  HTTP/SSE endpoint: http://localhost:{args.mcp_port}/sse")
+            print("  Available for real-time monitoring queries")
+            print()
+        except ImportError as e:
+            print(f"⚠️  Warning: Could not start MCP server: {e}")
+            print("  Install fastmcp to enable: pip install fastmcp")
+            print()
+        except Exception as e:
+            print(f"⚠️  Warning: MCP server failed to start: {e}")
+            print()
 
     # Check if model exists
     if not os.path.exists(args.model_path):
