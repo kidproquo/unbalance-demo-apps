@@ -61,7 +61,7 @@ LABELS = {'no_unbalance': 0, 'unbalance': 1}
 SECONDS_PER_ANALYSIS = 1.0
 WINDOW = int(SAMPLES_PER_SECOND * SECONDS_PER_ANALYSIS)
 N_CONV_LAYERS = 3  # Use the most accurate 3-layer CNN model
-UNBALANCE_THRESHOLD = 0.5  # Prediction threshold for unbalance detection
+UNBALANCE_THRESHOLD = 0.9  # Default prediction threshold (can be overridden via --threshold)
 
 
 def get_features(data, label):
@@ -1255,6 +1255,9 @@ Examples:
     parser.add_argument('--output-dir', type=str, default='../figures/detections',
                        help='Directory to save detection figures. Default: ../figures/detections')
 
+    parser.add_argument('--threshold', type=float, default=0.9,
+                       help='Unbalance detection threshold (0.0-1.0). Default: 0.9')
+
     # Redis synchronization arguments
     parser.add_argument('--redis-mode', action='store_true',
                        help='Enable Redis consumer mode for synchronized processing')
@@ -1327,6 +1330,10 @@ Examples:
         except Exception as e:
             print(f"⚠️  Warning: MCP server failed to start: {e}")
             print()
+
+    # Set global threshold from command line argument
+    global UNBALANCE_THRESHOLD
+    UNBALANCE_THRESHOLD = args.threshold
 
     # Check if model exists
     if not os.path.exists(args.model_path):
@@ -1422,7 +1429,7 @@ Examples:
     print(f"\nModel: {N_CONV_LAYERS}-layer CNN")
     if len(X_val) > 0:
         print(f"Validation Accuracy: {val_acc*100:.2f}%")
-    print(f"Detection Threshold: {UNBALANCE_THRESHOLD}")
+    print(f"Detection Threshold: {args.threshold}")
     print(f"Window Size: {args.time_window} seconds ({args.time_window * SAMPLES_PER_SECOND:,} samples)")
     print(f"\nCheck the {args.output_dir}/ directory for detected anomalies.")
 

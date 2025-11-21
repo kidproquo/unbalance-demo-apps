@@ -54,7 +54,7 @@ from utils.redis_client import RedisConfig, WindowConsumer, test_redis_connectio
 # Constants
 WINDOW = 4096  # Samples per second (1-second window)
 FFT_FEATURES = 2048  # Half of window size (rfft output)
-UNBALANCE_THRESHOLD = 0.5  # Prediction threshold for detection
+UNBALANCE_THRESHOLD = 0.9  # Default prediction threshold (can be overridden via --threshold)
 
 
 def prepare_datasets_fft(data):
@@ -932,6 +932,9 @@ Examples:
     parser.add_argument('--output-dir', type=str, default='../figures/detections',
                        help='Directory to save detection figures. Default: ../figures/detections')
 
+    parser.add_argument('--threshold', type=float, default=0.9,
+                       help='Unbalance detection threshold (0.0-1.0). Default: 0.9')
+
     # Redis synchronization arguments
     parser.add_argument('--redis-mode', action='store_true',
                        help='Enable Redis consumer mode for synchronized processing')
@@ -964,6 +967,10 @@ Examples:
     print(f"  Output Directory: {args.output_dir}")
     print(f"  MCP Server: {'Enabled' if args.enable_mcp else 'Disabled'}")
     print()
+
+    # Set global threshold from command line argument
+    global UNBALANCE_THRESHOLD
+    UNBALANCE_THRESHOLD = args.threshold
 
     # Test Redis connection if in Redis mode
     if args.redis_mode:

@@ -39,7 +39,7 @@ from utils.redis_client import RedisConfig, WindowConsumer, test_redis_connectio
 
 # Constants
 WINDOW = 4096  # Samples per second (1 second windows for feature extraction)
-UNBALANCE_THRESHOLD = 0.5  # Prediction threshold (RFC outputs 0 or 1, but we use predict_proba)
+UNBALANCE_THRESHOLD = 0.9  # Default prediction threshold (can be overridden via --threshold)
 
 # Dataset names for display
 DATASET_NAMES = {
@@ -838,6 +838,8 @@ Examples:
                         help='Enable MCP server for real-time monitoring')
     parser.add_argument('--mcp-port', type=int, default=8000,
                         help='Port for MCP server (default: 8000)')
+    parser.add_argument('--threshold', type=float, default=0.9,
+                        help='Unbalance detection threshold (0.0-1.0). Default: 0.9')
 
     # Redis synchronization arguments
     parser.add_argument('--redis-mode', action='store_true',
@@ -872,6 +874,10 @@ Examples:
     print(f"  Output Directory: {args.output_dir}")
     print(f"  MCP Server: {'Enabled' if args.enable_mcp else 'Disabled'}")
     print()
+
+    # Set global threshold from command line argument
+    global UNBALANCE_THRESHOLD
+    UNBALANCE_THRESHOLD = args.threshold
 
     # Test Redis connection if in Redis mode
     if args.redis_mode:
