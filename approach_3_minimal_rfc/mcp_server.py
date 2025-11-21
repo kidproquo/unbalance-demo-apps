@@ -198,18 +198,18 @@ def get_system_status() -> dict:
     }
 
 
-def run_mcp_server(transport: str = "streamable", port: int = 8000, host: str = "0.0.0.0"):
+def run_mcp_server(transport: str = "streamable-http", port: int = 8000, host: str = "0.0.0.0"):
     """
     Run the MCP server. Can be called from main script or standalone.
 
     Args:
-        transport: Transport type - "streamable" (HTTP streaming, default) or "stdio" (for Claude Desktop)
+        transport: Transport type - "streamable-http" (HTTP streaming, default) or "stdio" (for Claude Desktop)
         port: Port number for HTTP transport (default: 8000)
         host: Host to bind to (default: 0.0.0.0 for all interfaces)
     """
-    if transport == "streamable":
+    if transport == "streamable-http":
         # Run with HTTP streamable transport
-        mcp.run(transport="streamable", port=port, host=host)
+        mcp.run(transport="streamable-http", port=port, host=host)
     else:
         # Run with stdio transport (for Claude Desktop)
         mcp.run()

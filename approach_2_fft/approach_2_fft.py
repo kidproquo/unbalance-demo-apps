@@ -984,7 +984,7 @@ Examples:
             # Set the output directory for MCP server
             set_detections_dir(args.output_dir)
             mcp_thread = threading.Thread(
-                target=lambda: run_mcp_server(transport="streamable", port=args.mcp_port, host="0.0.0.0"),
+                target=lambda: run_mcp_server(transport="streamable-http", port=args.mcp_port, host="0.0.0.0"),
                 daemon=True
             )
             mcp_thread.start()
