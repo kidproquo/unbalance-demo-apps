@@ -206,10 +206,10 @@ networks:
 #   - Coordinator: Infinite loop, publishes 1 window/second (real-time)
 #   - Time window: 1 second
 #   - Processing speed: 1.0x (real-time)
-#   - MCP servers enabled on ports:
-#     * CNN: http://localhost:12001/sse
-#     * FFT: http://localhost:12002/sse
-#     * RFC: http://localhost:12003/sse
+#   - MCP servers enabled on ports (HTTP streamable, bound to 0.0.0.0):
+#     * CNN: http://localhost:12001
+#     * FFT: http://localhost:12002
+#     * RFC: http://localhost:12003
 #
 # Startup Sequence:
 #   Services start sequentially to avoid overloading the system during heavy

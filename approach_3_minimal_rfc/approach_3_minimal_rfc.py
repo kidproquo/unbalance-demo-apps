@@ -893,13 +893,13 @@ Examples:
             # Run MCP server in background thread
             mcp_thread = threading.Thread(
                 target=run_mcp_server,
-                args=("sse", args.mcp_port),
+                args=("streamable", args.mcp_port, "0.0.0.0"),
                 daemon=True
             )
             mcp_thread.start()
 
             print("✓ MCP server started in background thread")
-            print(f"  HTTP/SSE endpoint: http://localhost:{args.mcp_port}/sse")
+            print(f"  HTTP endpoint: http://0.0.0.0:{args.mcp_port}")
             print("  Available for real-time monitoring queries")
             print()
         except ImportError as e:

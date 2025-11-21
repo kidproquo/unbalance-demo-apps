@@ -984,12 +984,12 @@ Examples:
             # Set the output directory for MCP server
             set_detections_dir(args.output_dir)
             mcp_thread = threading.Thread(
-                target=lambda: run_mcp_server(transport="sse", port=args.mcp_port),
+                target=lambda: run_mcp_server(transport="streamable", port=args.mcp_port, host="0.0.0.0"),
                 daemon=True
             )
             mcp_thread.start()
             print("✓ MCP server started in background thread")
-            print(f"  HTTP/SSE endpoint: http://localhost:{args.mcp_port}/sse")
+            print(f"  HTTP endpoint: http://0.0.0.0:{args.mcp_port}")
             print("  Available for real-time monitoring queries")
             print()
         except ImportError as e:
