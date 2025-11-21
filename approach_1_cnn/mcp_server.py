@@ -126,7 +126,7 @@ def get_latest_detections(limit: int = 10) -> list:
     return detections[-limit:]
 
 
-@mcp.tool()
+@mcp.tool(name="cnn_get_performance_metrics")
 def get_performance_metrics() -> dict:
     """
     Get the latest performance metrics from the CNN unbalance detection system.
@@ -149,7 +149,7 @@ def get_performance_metrics() -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(name="cnn_get_recent_detections")
 def get_recent_detections(limit: int = 10) -> str:
     """
     Get the most recent unbalance detection events.
@@ -177,7 +177,7 @@ def get_recent_detections(limit: int = 10) -> str:
     })
 
 
-@mcp.tool()
+@mcp.tool(name="cnn_get_system_status")
 def get_system_status() -> dict:
     """
     Get the overall status of the CNN unbalance detection system.
