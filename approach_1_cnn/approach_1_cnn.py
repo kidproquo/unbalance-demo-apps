@@ -1015,6 +1015,7 @@ def process_from_redis(model, output_dir, redis_config, stream_name,
             start_idx = window_msg['start_idx']
             end_idx = window_msg['end_idx']
             message_id = window_msg['message_id']
+            redis_timestamp = window_msg['timestamp']
 
             # Get window data from Redis message (if available) or from loaded data
             if 'sensor_data' in window_msg:
@@ -1056,7 +1057,7 @@ def process_from_redis(model, output_dir, redis_config, stream_name,
             # Generate figure if unbalance detected
             if detected:
                 total_detections += 1
-                current_time = datetime.now(timezone.utc)
+                current_time = datetime.fromisoformat(redis_timestamp.replace('Z', '+00:00'))
 
                 print(f"\n  ⚠️  UNBALANCE DETECTED")
                 print(f"      Source: {dataset_label}")

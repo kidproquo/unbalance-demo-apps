@@ -650,8 +650,8 @@ def process_from_redis(model, scaler, output_dir, redis_config,
             unbalance_detections = np.sum(predictions_binary)
             detection_ratio = unbalance_detections / len(predictions_binary)
 
-            # Get current timestamp
-            current_time = datetime.utcnow()
+            # Use timestamp from coordinator
+            current_time = datetime.fromisoformat(redis_timestamp.replace('Z', '+00:00'))
             timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
 
             # Determine dataset name

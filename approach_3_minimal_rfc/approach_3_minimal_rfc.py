@@ -593,8 +593,8 @@ def process_from_redis(model, output_dir, redis_config,
             # Detection logic: majority voting
             detection_ratio = np.mean(predictions > UNBALANCE_THRESHOLD)
 
-            # Get current UTC time
-            current_time = datetime.now(timezone.utc)
+            # Use timestamp from coordinator
+            current_time = datetime.fromisoformat(redis_timestamp.replace('Z', '+00:00'))
             selected_name = DATASET_NAMES.get(dataset_label, dataset_label)
 
             # Determine if unbalance detected
