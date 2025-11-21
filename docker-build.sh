@@ -115,10 +115,14 @@ if [[ $? -eq 0 ]]; then
         OLD_IMAGE="${IMAGE_NAME}:v${CURRENT_VERSION}"
         if docker image inspect "$OLD_IMAGE" &>/dev/null; then
             echo -e "${YELLOW}Removing previous image: ${OLD_IMAGE}${NC}"
-            docker rmi "$OLD_IMAGE" 2>/dev/null || echo -e "${YELLOW}Could not remove ${OLD_IMAGE} (may be in use)${NC}"
+            docker rmi -f "$OLD_IMAGE" 2>/dev/null || echo -e "${YELLOW}Could not remove ${OLD_IMAGE} (may be in use)${NC}"
             echo -e "${GREEN}✓ Previous image removed${NC}"
         fi
     fi
+
+    # Prune build cache, keeping up to 5GB
+    echo -e "${YELLOW}Pruning build cache (keeping 5GB)...${NC}"
+    docker builder prune -f --keep-storage=5GB 2>/dev/null || true
 
     # Show image info
     echo

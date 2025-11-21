@@ -3,18 +3,6 @@
 
 FROM python:3.11-slim
 
-# Build arguments
-ARG VERSION=unknown
-ARG BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-
-# Labels
-LABEL org.opencontainers.image.title="Unbalanced Demo Apps"
-LABEL org.opencontainers.image.description="Synchronized unbalance detection using CNN, FFT FCN, and Random Forest"
-LABEL org.opencontainers.image.version="${VERSION}"
-LABEL org.opencontainers.image.created="${BUILD_DATE}"
-LABEL org.opencontainers.image.source="https://github.com/kidproquo/unbalanced-demo-apps"
-LABEL org.opencontainers.image.authors="Prince"
-
 # Set working directory
 WORKDIR /app
 
@@ -56,6 +44,14 @@ COPY data_coordinator.py /app/
 
 # Set Python path to include /app
 ENV PYTHONPATH=/app
+
+# Build arguments and labels at the END to preserve cache
+ARG VERSION=unknown
+LABEL org.opencontainers.image.title="Unbalanced Demo Apps"
+LABEL org.opencontainers.image.description="Synchronized unbalance detection using CNN, FFT FCN, and Random Forest"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/kidproquo/unbalanced-demo-apps"
+LABEL org.opencontainers.image.authors="Prince"
 
 # Default command (override in docker-compose)
 CMD ["python", "-u", "data_coordinator.py", "--max-windows", "100"]
