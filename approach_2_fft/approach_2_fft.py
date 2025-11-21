@@ -536,15 +536,14 @@ def process_with_weighted_sampling(model, data, scaler, output_dir, speed=0,
                             f"{overall_accuracy:<10.3f} {overall_precision:<10.3f} {overall_recall:<10.3f}\n")
 
 
-def process_from_redis(model, data, scaler, output_dir, redis_config,
+def process_from_redis(model, scaler, output_dir, redis_config,
                       stream_name='windows', consumer_group='detectors',
-                      consumer_name='fft', log_interval=10):
+                      consumer_name='fft', log_interval=10, data=None):
     """
     Process windows from Redis stream for synchronized detection with FFT preprocessing.
 
     Args:
         model: Trained FFT FCN model
-        data: Dictionary of evaluation datasets (0E-4E)
         scaler: Fitted RobustScaler
         output_dir: Directory to save detection figures
         redis_config: RedisConfig instance
@@ -552,6 +551,7 @@ def process_from_redis(model, data, scaler, output_dir, redis_config,
         consumer_group: Consumer group name
         consumer_name: Consumer name for this approach
         log_interval: Log metrics to console every N windows
+        data: Optional dictionary of evaluation datasets for fallback
     """
     print(f"\n{'='*80}")
     print("Redis Consumer Mode - Synchronized Window Processing")
@@ -612,14 +612,19 @@ def process_from_redis(model, data, scaler, output_dir, redis_config,
             end_idx = window_msg['end_idx']
             redis_timestamp = window_msg['timestamp']
 
-            # Get window data
-            if dataset_label not in data:
-                print(f"⚠️  Warning: Dataset {dataset_label} not loaded, skipping")
+            # Get window data from Redis message (if available) or from loaded data
+            if 'sensor_data' in window_msg:
+                # Sensor data from Redis: columns are [Vibration_1, Vibration_2, Vibration_3]
+                # FFT uses Vibration_1 (column index 0)
+                window_data = window_msg['sensor_data'][:, 0]
+            elif data is not None and dataset_label in data:
+                # Fallback to loaded data
+                sensor_data = data[dataset_label][SENSOR].values
+                window_data = sensor_data[start_idx:end_idx]
+            else:
+                print(f"⚠️  No sensor data available for window, skipping")
                 consumer.acknowledge(window_msg['message_id'])
                 continue
-
-            sensor_data = data[dataset_label][SENSOR].values
-            window_data = sensor_data[start_idx:end_idx]
 
             # Split into 1-second windows for prediction
             n_second_windows = int(np.floor(len(window_data) / WINDOW))
@@ -1006,14 +1011,27 @@ Examples:
         print("\nPlease ensure the reference model exists, or specify a different model with --model-path")
         return
 
-    # Load only the datasets we need (much faster!)
-    data = load_data(args.data_url, datasets_to_load=args.dataset)
+    # In Redis mode, skip data loading - data comes from coordinator via Redis
+    if args.redis_mode:
+        print("=" * 80)
+        print("Redis Mode - Skipping Data Loading")
+        print("=" * 80)
+        print("Data will be received from coordinator via Redis stream")
+        print("Using identity scaler (no scaling) for FFT preprocessing")
+        data = None
+        X_val_fft, y_val = np.array([]), np.array([])
+        # Create identity scaler (no actual scaling)
+        from sklearn.preprocessing import FunctionTransformer
+        scaler = FunctionTransformer()  # Identity transform
+    else:
+        # Load only the datasets we need (much faster!)
+        data = load_data(args.data_url, datasets_to_load=args.dataset)
 
-    # Skip warm-up phase
-    data = skip_warmup(data)
+        # Skip warm-up phase
+        data = skip_warmup(data)
 
-    # Prepare datasets for validation with FFT transformation
-    X_val_fft, y_val, scaler = prepare_datasets_fft(data)
+        # Prepare datasets for validation with FFT transformation
+        X_val_fft, y_val, scaler = prepare_datasets_fft(data)
 
     # Load the pre-trained model
     print("=" * 80)
@@ -1060,14 +1078,14 @@ Examples:
         redis_config = RedisConfig(host=args.redis_host, port=args.redis_port)
         process_from_redis(
             model=model,
-            data=data,
             scaler=scaler,
             output_dir=args.output_dir,
             redis_config=redis_config,
             stream_name=args.redis_stream,
             consumer_group=args.consumer_group,
             consumer_name=args.consumer_name,
-            log_interval=args.log_interval
+            log_interval=args.log_interval,
+            data=data  # Optional fallback if sensor data not in Redis
         )
     else:
         # Standalone mode - weighted random sampling

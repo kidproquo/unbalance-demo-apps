@@ -61,19 +61,19 @@ def extract_minimal_features(window_data):
     5-7. Kurtosis of each vibration sensor
 
     Args:
-        window_data: Array of shape (n_samples, 4) with columns [RPM, Vibration_1, Vibration_2, Vibration_3]
+        window_data: Array of shape (n_samples, 3) with columns [Vibration_1, Vibration_2, Vibration_3]
 
     Returns:
         Array of shape (7,) containing the extracted features
     """
     features = np.array([
-        np.mean(window_data[:, 0]),                    # RPM mean
-        np.std(window_data[:, 1]),                      # Sensor 1 std
-        np.std(window_data[:, 2]),                      # Sensor 2 std
-        np.std(window_data[:, 3]),                      # Sensor 3 std
-        scipy.stats.kurtosis(window_data[:, 1]),        # Sensor 1 kurtosis
-        scipy.stats.kurtosis(window_data[:, 2]),        # Sensor 2 kurtosis
-        scipy.stats.kurtosis(window_data[:, 3])         # Sensor 3 kurtosis
+        np.mean(window_data[:, 0]),                    # Sensor 1 mean
+        np.std(window_data[:, 0]),                      # Sensor 1 std
+        np.std(window_data[:, 1]),                      # Sensor 2 std
+        np.std(window_data[:, 2]),                      # Sensor 3 std
+        scipy.stats.kurtosis(window_data[:, 0]),        # Sensor 1 kurtosis
+        scipy.stats.kurtosis(window_data[:, 1]),        # Sensor 2 kurtosis
+        scipy.stats.kurtosis(window_data[:, 2])         # Sensor 3 kurtosis
     ])
     return features
 
@@ -223,7 +223,7 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
             # Extract 1-second windows for feature extraction
             # Each time window contains multiple 1-second windows
             n_second_windows = len(window_data) // WINDOW
-            window_data_windowed = window_data[:n_second_windows * WINDOW].reshape(n_second_windows, WINDOW, 4)
+            window_data_windowed = window_data[:n_second_windows * WINDOW].reshape(n_second_windows, WINDOW, 3)
 
             # Extract minimal features for each 1-second window
             window_features = np.array([extract_minimal_features(w) for w in window_data_windowed])
@@ -259,22 +259,22 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
 
                 # Panel 1: All sensor signals
                 time_axis = np.arange(len(window_data)) / SAMPLES_PER_SECOND
-                axes[0].plot(time_axis, window_data[:, 1], label='Vibration_1', alpha=0.7, linewidth=0.5)
-                axes[0].plot(time_axis, window_data[:, 2], label='Vibration_2', alpha=0.7, linewidth=0.5)
-                axes[0].plot(time_axis, window_data[:, 3], label='Vibration_3', alpha=0.7, linewidth=0.5)
+                axes[0].plot(time_axis, window_data[:, 0], label='Vibration_1', alpha=0.7, linewidth=0.5)
+                axes[0].plot(time_axis, window_data[:, 1], label='Vibration_2', alpha=0.7, linewidth=0.5)
+                axes[0].plot(time_axis, window_data[:, 2], label='Vibration_3', alpha=0.7, linewidth=0.5)
                 axes[0].set_ylabel('Amplitude')
                 axes[0].set_title('Raw Vibration Signals')
                 axes[0].legend(loc='upper right')
                 axes[0].grid(True, alpha=0.3)
 
-                # Panel 2: RPM over time
+                # Panel 2: Vibration_1 zoomed
                 axes[1].plot(time_axis, window_data[:, 0], color='green', linewidth=1)
-                axes[1].set_ylabel('RPM')
-                axes[1].set_title('Rotation Speed (RPM)')
+                axes[1].set_ylabel('Amplitude')
+                axes[1].set_title('Vibration Sensor 1')
                 axes[1].grid(True, alpha=0.3)
 
                 # Panel 3: Feature visualization (7 features per 1-second window)
-                feature_names = ['RPM\\nmean', 'V1\\nstd', 'V2\\nstd', 'V3\\nstd', 'V1\\nkurt', 'V2\\nkurt', 'V3\\nkurt']
+                feature_names = ['V1\\nmean', 'V1\\nstd', 'V2\\nstd', 'V3\\nstd', 'V1\\nkurt', 'V2\\nkurt', 'V3\\nkurt']
                 feature_time_axis = np.arange(len(window_features))
                 for i in range(7):
                     axes[2].plot(feature_time_axis, window_features[:, i], marker='o', label=feature_names[i], markersize=3)
@@ -476,21 +476,21 @@ def process_with_weighted_sampling(model, data, output_dir, speed, time_window_s
     print(f"{'='*80}")
 
 
-def process_from_redis(model, data, output_dir, redis_config,
+def process_from_redis(model, output_dir, redis_config,
                       stream_name='windows', consumer_group='detectors',
-                      consumer_name='rfc', log_interval=10):
+                      consumer_name='rfc', log_interval=10, data=None):
     """
     Process windows from Redis stream for synchronized detection with minimal feature extraction.
 
     Args:
         model: Pre-trained Random Forest Classifier
-        data: Dictionary of {label: DataFrame}
         output_dir: Directory to save detection figures
         redis_config: RedisConfig instance
         stream_name: Redis stream name
         consumer_group: Consumer group name
         consumer_name: Consumer name for this approach
         log_interval: Log metrics to console every N windows
+        data: Optional dictionary of {label: DataFrame} for fallback
     """
     print(f"\n{'='*80}")
     print("Redis Consumer Mode - Synchronized Window Processing")
@@ -560,16 +560,20 @@ def process_from_redis(model, data, output_dir, redis_config,
             end_idx = window_msg['end_idx']
             redis_timestamp = window_msg['timestamp']
 
-            # Get window data
-            if dataset_label not in data:
-                print(f"⚠️  Warning: Dataset {dataset_label} not loaded, skipping")
+            # Get window data from Redis message (if available) or from loaded data
+            if 'sensor_data' in window_msg:
+                # Sensor data from Redis: columns are [RPM, Vibration_1, Vibration_2, Vibration_3]
+                # RFC uses all 4 columns
+                window_data = window_msg['sensor_data']
+            elif data is not None and dataset_label in data:
+                # Fallback to loaded data
+                # Select columns: Measured_RPM (index 1) and Vibration_1/2/3 (indices 2-4)
+                # Skip V_in (index 0)
+                window_data = data[dataset_label].iloc[start_idx:end_idx, 1:].values
+            else:
+                print(f"⚠️  No sensor data available for window, skipping")
                 consumer.acknowledge(window_msg['message_id'])
                 continue
-
-            # Extract the time window
-            # Select columns: Measured_RPM (index 1) and Vibration_1/2/3 (indices 2-4)
-            # Skip V_in (index 0)
-            window_data = data[dataset_label].iloc[start_idx:end_idx, 1:].values
 
             # Extract 1-second windows for feature extraction
             n_second_windows = len(window_data) // WINDOW
@@ -578,7 +582,7 @@ def process_from_redis(model, data, output_dir, redis_config,
                 consumer.acknowledge(window_msg['message_id'])
                 continue
 
-            window_data_windowed = window_data[:n_second_windows * WINDOW].reshape(n_second_windows, WINDOW, 4)
+            window_data_windowed = window_data[:n_second_windows * WINDOW].reshape(n_second_windows, WINDOW, 3)
 
             # Extract minimal features for each 1-second window
             window_features = np.array([extract_minimal_features(w) for w in window_data_windowed])
@@ -612,21 +616,30 @@ def process_from_redis(model, data, output_dir, redis_config,
                              f'{current_time.strftime("%Y-%m-%d %H:%M:%S")} UTC',
                              fontsize=14, fontweight='bold')
 
-                # Plot 1: RPM over time
+                # Plot 1: Vibration Sensor 1
                 time_axis = np.arange(len(window_data)) / SAMPLES_PER_SECOND
                 axes[0].plot(time_axis, window_data[:, 0], lw=0.5, color='blue')
-                axes[0].set_ylabel('RPM')
-                axes[0].set_title('RPM Over Time')
+                axes[0].set_ylabel('Amplitude')
+                axes[0].set_title('Vibration Sensor 1')
                 axes[0].grid(True, alpha=0.3)
 
-                # Plot 2-4: Vibration sensors
-                sensor_labels = ['Vibration Sensor 1', 'Vibration Sensor 2', 'Vibration Sensor 3']
-                colors = ['green', 'orange', 'red']
-                for i, (label, color) in enumerate(zip(sensor_labels, colors), start=1):
-                    axes[i].plot(time_axis, window_data[:, i], lw=0.5, color=color)
-                    axes[i].set_ylabel('Amplitude')
-                    axes[i].set_title(label)
-                    axes[i].grid(True, alpha=0.3)
+                # Plot 2-3: Vibration sensors 2-3
+                axes[1].plot(time_axis, window_data[:, 1], lw=0.5, color='green')
+                axes[1].set_ylabel('Amplitude')
+                axes[1].set_title('Vibration Sensor 2')
+                axes[1].grid(True, alpha=0.3)
+
+                axes[2].plot(time_axis, window_data[:, 2], lw=0.5, color='orange')
+                axes[2].set_ylabel('Amplitude')
+                axes[2].set_title('Vibration Sensor 3')
+                axes[2].grid(True, alpha=0.3)
+
+                # Plot 4: All sensors combined
+                for j, color in enumerate(['blue', 'green', 'orange']):
+                    axes[3].plot(time_axis, window_data[:, j], lw=0.3, color=color, alpha=0.7)
+                axes[3].set_ylabel('Amplitude')
+                axes[3].set_title('All Sensors Combined')
+                axes[3].grid(True, alpha=0.3)
 
                 axes[-1].set_xlabel('Time (seconds)')
                 plt.tight_layout()
@@ -947,15 +960,22 @@ Examples:
         print("Skipped (using pre-trained model with known performance)")
         print("See training script output for validation metrics")
 
-    # STEP 3: Load datasets
-    print("\n" + "=" * 80)
-    print(f"STEP {'3' if args.dataset == 'all' else '2'}: Load Datasets")
-    print("=" * 80)
+    # STEP 3: Load datasets (skip in Redis mode - data comes from coordinator)
+    if args.redis_mode:
+        print("\n" + "=" * 80)
+        print("Redis Mode - Skipping Data Loading")
+        print("=" * 80)
+        print("Data will be received from coordinator via Redis stream")
+        data_prepared = None
+    else:
+        print("\n" + "=" * 80)
+        print(f"STEP {'3' if args.dataset == 'all' else '2'}: Load Datasets")
+        print("=" * 80)
 
-    # Load data from ZIP file
-    data_zip_path = args.data_url
-    data = load_data(data_zip_path, datasets_to_load=datasets_to_load)
-    data_prepared = prepare_datasets_minimal(data)
+        # Load data from ZIP file
+        data_zip_path = args.data_url
+        data = load_data(data_zip_path, datasets_to_load=datasets_to_load)
+        data_prepared = prepare_datasets_minimal(data)
 
     # STEP 4: Process data
     print("\n" + "=" * 80)
@@ -979,13 +999,13 @@ Examples:
         redis_config = RedisConfig(host=args.redis_host, port=args.redis_port)
         process_from_redis(
             model=model,
-            data=data_prepared,
             output_dir=args.output_dir,
             redis_config=redis_config,
             stream_name=args.redis_stream,
             consumer_group=args.consumer_group,
             consumer_name=args.consumer_name,
-            log_interval=args.log_interval
+            log_interval=args.log_interval,
+            data=data_prepared  # Optional fallback if sensor data not in Redis
         )
     else:
         # Standalone mode - weighted random sampling

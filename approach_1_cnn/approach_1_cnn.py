@@ -934,20 +934,20 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
     print(f"{'='*80}")
 
 
-def process_from_redis(model, data, output_dir, redis_config, stream_name,
-                       consumer_group, consumer_name, log_interval=10):
+def process_from_redis(model, output_dir, redis_config, stream_name,
+                       consumer_group, consumer_name, log_interval=10, data=None):
     """
     Process windows from Redis stream for synchronized detection across approaches.
 
     Args:
         model: Pre-trained CNN model
-        data: Dictionary of {label: DataFrame} with all datasets loaded
         output_dir: Directory to save detection figures
         redis_config: RedisConfig object
         stream_name: Redis stream name to consume from
         consumer_group: Consumer group name
         consumer_name: Unique consumer name for this process
         log_interval: How often to log performance metrics
+        data: Optional dictionary of {label: DataFrame} for fallback (if sensor data not in Redis)
     """
     import json
     from datetime import datetime, timezone
@@ -983,8 +983,9 @@ def process_from_redis(model, data, output_dir, redis_config, stream_name,
         return
 
     # Track performance metrics per dataset
+    all_labels = ['0E', '1E', '2E', '3E', '4E']
     dataset_stats = {label: {'TP': 0, 'FP': 0, 'TN': 0, 'FN': 0, 'total': 0}
-                     for label in data.keys()}
+                     for label in all_labels}
 
     # Create timestamped report filename
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
@@ -1015,13 +1016,18 @@ def process_from_redis(model, data, output_dir, redis_config, stream_name,
             end_idx = window_msg['end_idx']
             message_id = window_msg['message_id']
 
-            # Get window data
-            if dataset_label not in data:
-                print(f"⚠️  Unknown dataset: {dataset_label}, skipping")
+            # Get window data from Redis message (if available) or from loaded data
+            if 'sensor_data' in window_msg:
+                # Sensor data from Redis: columns are [Vibration_1, Vibration_2, Vibration_3]
+                # CNN uses Vibration_1 (column index 0)
+                window_data = window_msg['sensor_data'][:, 0]
+            elif data is not None and dataset_label in data:
+                # Fallback to loaded data
+                window_data = data[dataset_label][SENSOR].iloc[start_idx:end_idx].values
+            else:
+                print(f"⚠️  No sensor data available for window {window_idx}, skipping")
                 consumer.acknowledge(message_id)
                 continue
-
-            window_data = data[dataset_label][SENSOR].iloc[start_idx:end_idx].values
 
             # Reshape for CNN: (samples, 1) - CNN expects 2D input
             window_data_reshaped = window_data.reshape(-1, 1)
@@ -1327,14 +1333,23 @@ Examples:
         print("\nPlease ensure the reference model exists, or specify a different model with --model-path")
         return
 
-    # Load only the datasets we need (much faster!)
-    data = load_data(args.data_url, datasets_to_load=args.dataset)
+    # In Redis mode, skip data loading - data comes from coordinator via Redis
+    if args.redis_mode:
+        print("=" * 80)
+        print("Redis Mode - Skipping Data Loading")
+        print("=" * 80)
+        print("Data will be received from coordinator via Redis stream")
+        data = None
+        X_val, y_val = np.array([]), np.array([])
+    else:
+        # Load only the datasets we need (much faster!)
+        data = load_data(args.data_url, datasets_to_load=args.dataset)
 
-    # Skip warm-up phase
-    data = skip_warmup(data)
+        # Skip warm-up phase
+        data = skip_warmup(data)
 
-    # Prepare datasets for validation
-    X_val, y_val = prepare_datasets(data)
+        # Prepare datasets for validation
+        X_val, y_val = prepare_datasets(data)
 
     # Load the pre-trained model
     print("=" * 80)
@@ -1380,13 +1395,13 @@ Examples:
         redis_config = RedisConfig(host=args.redis_host, port=args.redis_port)
         process_from_redis(
             model=model,
-            data=data,
             output_dir=args.output_dir,
             redis_config=redis_config,
             stream_name=args.redis_stream,
             consumer_group=args.consumer_group,
             consumer_name=args.consumer_name,
-            log_interval=args.log_interval
+            log_interval=args.log_interval,
+            data=data  # Optional fallback if sensor data not in Redis
         )
     else:
         # Standalone mode - weighted random sampling

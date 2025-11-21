@@ -9,8 +9,23 @@ import redis
 import json
 import time
 import os
-from typing import Dict, Optional, List
+import base64
+import numpy as np
+from typing import Dict, Optional, List, Union
 from datetime import datetime, timezone
+
+
+def encode_array(arr: np.ndarray) -> str:
+    """Encode numpy array to base64 string for Redis storage."""
+    return base64.b64encode(arr.tobytes()).decode('ascii')
+
+
+def decode_array(data: str, dtype: np.dtype = np.float64, shape: tuple = None) -> np.ndarray:
+    """Decode base64 string back to numpy array."""
+    arr = np.frombuffer(base64.b64decode(data), dtype=dtype)
+    if shape is not None:
+        arr = arr.reshape(shape)
+    return arr
 
 
 class RedisConfig:
@@ -89,7 +104,8 @@ class WindowPublisher:
                     raise ConnectionError(f"Failed to connect to Redis after {max_retries} attempts: {e}")
 
     def publish_window(self, dataset: str, window_idx: int,
-                      start_idx: int, end_idx: int) -> str:
+                      start_idx: int, end_idx: int,
+                      sensor_data: np.ndarray = None) -> str:
         """
         Publish a window selection to the stream.
 
@@ -98,6 +114,8 @@ class WindowPublisher:
             window_idx: Window index within the selected dataset
             start_idx: Start row index in the original CSV
             end_idx: End row index in the original CSV
+            sensor_data: Optional numpy array of sensor data (shape: n_samples x n_columns)
+                        Columns: [RPM, Vibration_1, Vibration_2, Vibration_3]
 
         Returns:
             Message ID from Redis
@@ -109,6 +127,12 @@ class WindowPublisher:
             'end_idx': end_idx,
             'timestamp': datetime.now(timezone.utc).isoformat()
         }
+
+        # Include sensor data if provided
+        if sensor_data is not None:
+            message['sensor_data'] = encode_array(sensor_data)
+            message['sensor_shape'] = json.dumps(sensor_data.shape)
+            message['sensor_dtype'] = str(sensor_data.dtype)
 
         # Publish to Redis stream using XADD
         message_id = self.client.xadd(
@@ -239,7 +263,7 @@ class WindowConsumer:
             message_id, data = message_list[0]
 
             # Parse and return
-            return {
+            result = {
                 'message_id': message_id,
                 'dataset': data['dataset'],
                 'window_idx': int(data['window_idx']),
@@ -247,6 +271,14 @@ class WindowConsumer:
                 'end_idx': int(data['end_idx']),
                 'timestamp': data['timestamp']
             }
+
+            # Decode sensor data if present
+            if 'sensor_data' in data:
+                shape = tuple(json.loads(data['sensor_shape']))
+                dtype = np.dtype(data['sensor_dtype'])
+                result['sensor_data'] = decode_array(data['sensor_data'], dtype, shape)
+
+            return result
 
         except redis.ConnectionError as e:
             print(f"⚠️  Redis connection error: {e}")

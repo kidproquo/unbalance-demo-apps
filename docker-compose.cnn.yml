@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # Approach 1: CNN on Raw Sensor Data
+  approach-cnn:
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    # For local development, uncomment to build from source:
+    # build: .
+    container_name: unbalance-cnn
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "12001:8000"
+    command: >
+      python -u approach_1_cnn/approach_1_cnn.py
+      --redis-mode
+      --redis-host redis
+      --redis-stream windows
+      --consumer-group detectors
+      --consumer-name cnn
+      --log-interval 10
+      --dataset all
+      --time-window 1
+      --speed 1.0
+      --enable-mcp
+      --mcp-port 8000
+      --model-path /app/models/cnn_3_layers.h5
+      --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
+      --output-dir /app/outputs/cnn
+    volumes:
+      - ../data:/app/data:ro
+      - ./outputs:/app/outputs
+    working_dir: /app
+    networks:
+      - unbalance-demo-apps_unbalance-net
+
+networks:
+  unbalance-demo-apps_unbalance-net:
+    external: true
+
+# Usage:
+#   Pull images:  docker-compose pull
+#   Run:          docker-compose up
+#   Stop:         docker-compose down
+#
+# For local development with custom builds:
+#   1. Uncomment "build: ." in each service
+#   2. Comment out "image: ..." lines
+#   3. Build:     docker-compose build
+#   4. Run:       docker-compose up
+#
+# To use a specific version instead of :latest:
+#   Replace "latest" with version tag (e.g., "v0.1.0")
+#
+# Configuration:
+#   - Coordinator: Infinite loop, publishes 1 window/second (real-time)
+#   - Time window: 1 second
+#   - Processing speed: 1.0x (real-time)
+#   - MCP servers enabled on ports:
+#     * CNN: http://localhost:12001/sse
+#     * FFT: http://localhost:12002/sse
+#     * RFC: http://localhost:12003/sse
+#
+# Outputs:
+#   All outputs are saved to ./outputs/ directory on the host:
+#     ./outputs/cnn/  - CNN detection figures and performance reports
+#     ./outputs/fft/  - FFT detection figures and performance reports
+#     ./outputs/rfc/  - RFC detection figures and performance reports
+#
+# The coordinator runs indefinitely, publishing windows at real-time speed.
+# All three approaches process the same windows for direct performance comparison.
+# Use Ctrl+C or 'docker-compose down' to stop.

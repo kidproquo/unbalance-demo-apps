@@ -21,6 +21,10 @@ from datetime import datetime, timezone
 # Add current directory to path for utils
 sys.path.insert(0, str(Path(__file__).parent))
 from utils.redis_client import RedisConfig, WindowPublisher, test_redis_connection
+from utils.data_utils import load_data, skip_warmup
+
+# Sensor columns to extract: 3 vibration sensors (skip V_in at index 0)
+SENSOR_COLUMNS = ['Vibration_1', 'Vibration_2', 'Vibration_3']
 
 
 # Constants
@@ -84,6 +88,10 @@ Examples:
     parser.add_argument('--redis-stream', type=str, default='windows',
                        help='Redis stream name (default: windows)')
 
+    parser.add_argument('--data-url', type=str,
+                       default='/app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip',
+                       help='Path to dataset ZIP file')
+
     args = parser.parse_args()
 
     # Print header
@@ -100,15 +108,16 @@ Examples:
     print(f"  Redis Stream: {args.redis_stream}")
     print()
 
-    # Dataset information (from actual data)
-    # These are the actual lengths from the evaluation datasets
-    data_lengths = {
-        '0E': 6893567,  # No unbalance
-        '1E': 6901503,  # Level 1
-        '2E': 6884351,  # Level 2
-        '3E': 6893311,  # Level 3
-        '4E': 6904575   # Level 4
-    }
+    # Load dataset
+    print("=" * 80)
+    print("Loading Dataset")
+    print("=" * 80)
+    print(f"Data source: {args.data_url}")
+    data = load_data(args.data_url, datasets_to_load='all')
+    data = skip_warmup(data)
+
+    # Get actual data lengths from loaded data
+    data_lengths = {label: len(df) for label, df in data.items()}
 
     time_window_samples = args.time_window * SAMPLES_PER_SECOND
 
@@ -184,15 +193,20 @@ Examples:
             start_idx = current_window * time_window_samples
             end_idx = start_idx + time_window_samples
 
+            # Extract sensor data for this window
+            # Columns: RPM, Vibration_1, Vibration_2, Vibration_3
+            sensor_data = data[selected_label][SENSOR_COLUMNS].iloc[start_idx:end_idx].values
+
             # Update current window for next selection
             dataset_current_window[selected_label] = current_window + 1
 
-            # Publish to Redis
+            # Publish to Redis with sensor data
             message_id = publisher.publish_window(
                 dataset=selected_label,
                 window_idx=current_window,
                 start_idx=start_idx,
-                end_idx=end_idx
+                end_idx=end_idx,
+                sensor_data=sensor_data
             )
 
             # Log progress
