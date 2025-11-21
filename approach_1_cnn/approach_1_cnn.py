@@ -962,6 +962,11 @@ def process_from_redis(model, data, output_dir, redis_config, stream_name,
     print(f"  Output Directory: {output_dir}")
     print()
 
+    # Clear and recreate output directory
+    if os.path.exists(output_dir):
+        import shutil
+        shutil.rmtree(output_dir)
+        print(f"  Cleared existing output directory: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
 
     # Create Redis consumer

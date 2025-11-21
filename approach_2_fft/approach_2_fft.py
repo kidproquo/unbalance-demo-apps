@@ -1031,7 +1031,11 @@ Examples:
         print(f"\nValidation Accuracy: {val_result[1]*100:.2f}%")
         print(f"Validation Loss: {val_result[0]:.4f}")
 
-    # Create output directory
+    # Clear and recreate output directory
+    if os.path.exists(args.output_dir):
+        import shutil
+        shutil.rmtree(args.output_dir)
+        print(f"Cleared existing output directory: {args.output_dir}")
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Process timeseries data

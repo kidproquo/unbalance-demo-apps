@@ -510,7 +510,11 @@ def process_from_redis(model, data, output_dir, redis_config,
         print("❌ Timeout waiting for stream. Make sure data_coordinator.py is running.")
         return
 
-    # Ensure output directory exists
+    # Clear and recreate output directory
+    if os.path.exists(output_dir):
+        import shutil
+        shutil.rmtree(output_dir)
+        print(f"  Cleared existing output directory: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
 
     # Create timestamped report filename
