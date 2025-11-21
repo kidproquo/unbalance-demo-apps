@@ -1017,24 +1017,38 @@ Examples:
         print("Redis Mode - Loading Data for Scaler Fitting")
         print("=" * 80)
         print("Data will be received from coordinator via Redis stream")
-        print("Loading 0E dataset to fit RobustScaler for FFT preprocessing...")
+        print("Loading datasets to fit RobustScaler for FFT preprocessing...")
 
-        # Load just 0E for scaler fitting (faster than loading all)
-        data = load_data(args.data_url, datasets_to_load='0E')
-        data = skip_warmup(data)
+        # Load datasets one at a time to reduce memory, take 1000 windows from each
+        # This matches the original scaler fitting which used first 5000 windows
+        # of concatenated [0E, 1E, 2E, 3E, 4E] data
+        X_list = []
+        windows_per_dataset = 1000
 
-        # Fit scaler on a subset of 0E data
-        sensor_data = data['0E'][SENSOR].values
-        n_windows = min(5000, len(sensor_data) // WINDOW)
-        X_subset = sensor_data[:n_windows * WINDOW].reshape((n_windows, WINDOW))
-        X_subset_fft = np.abs(np.fft.rfft(X_subset, axis=1))[:, :FFT_FEATURES]
-        X_subset_fft[:, 0] = 0  # Zero out DC component
+        for label in ['0E', '1E', '2E', '3E', '4E']:
+            data = load_data(args.data_url, datasets_to_load=label)
+            data = skip_warmup(data)
+            sensor_data = data[label][SENSOR].values
+            n_windows = min(windows_per_dataset, len(sensor_data) // WINDOW)
+            X = sensor_data[:n_windows * WINDOW].reshape((n_windows, WINDOW))
+            X_list.append(X)
+            print(f"  {label}: {n_windows} windows")
+            del data  # Free memory immediately
 
-        scaler = RobustScaler(quantile_range=(5, 95)).fit(X_subset_fft)
-        print(f"Scaler fitted on {n_windows} windows from 0E dataset")
+        X_all = np.concatenate(X_list)
+        del X_list
+
+        # Apply FFT and fit scaler
+        X_train_fft = np.abs(np.fft.rfft(X_all, axis=1))[:, :FFT_FEATURES]
+        X_train_fft[:, 0] = 0  # Zero out DC component
+        del X_all
+
+        scaler = RobustScaler(quantile_range=(5, 95)).fit(X_train_fft)
+        print(f"Scaler fitted on {len(X_train_fft)} windows from combined dataset")
+        del X_train_fft
 
         X_val_fft, y_val = np.array([]), np.array([])
-        data = None  # Free memory, data will come from Redis
+        data = None
     else:
         # Load only the datasets we need (much faster!)
         data = load_data(args.data_url, datasets_to_load=args.dataset)

@@ -204,8 +204,9 @@ class WindowConsumer:
         """
         Create consumer group if it doesn't exist.
 
-        All approaches use the same consumer group so each message is
-        delivered to ALL consumers (fan-out pattern).
+        Each approach should use its own consumer group for fan-out pattern
+        (each message delivered to all approaches). If multiple consumers
+        share the same group, messages are distributed among them instead.
         """
         try:
             # Try to create consumer group starting from beginning of stream

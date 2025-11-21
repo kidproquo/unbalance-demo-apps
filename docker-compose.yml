@@ -81,7 +81,7 @@ services:
       --redis-mode
       --redis-host redis
       --redis-stream windows
-      --consumer-group detectors
+      --consumer-group cnn-group
       --consumer-name cnn
       --log-interval 10
       --dataset all
@@ -106,7 +106,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G  # Reduced - no data loading, only model
+          memory: 3G  # Needs more memory for scaler fitting
     depends_on:
       redis:
         condition: service_healthy
@@ -117,7 +117,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
-      start_period: 30s  # Reduced - faster startup without data loading
+      start_period: 120s  # Longer startup for data loading
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -129,7 +129,7 @@ services:
       --redis-mode
       --redis-host redis
       --redis-stream windows
-      --consumer-group detectors
+      --consumer-group fft-group
       --consumer-name fft
       --log-interval 10
       --dataset all
@@ -179,7 +179,7 @@ services:
       --redis-mode
       --redis-host redis
       --redis-stream windows
-      --consumer-group detectors
+      --consumer-group rfc-group
       --consumer-name rfc
       --log-interval 10
       --dataset all
