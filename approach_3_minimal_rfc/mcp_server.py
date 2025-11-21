@@ -46,10 +46,14 @@ def get_latest_performance_report() -> Optional[dict]:
     with open(latest_report, 'r') as f:
         lines = f.readlines()
 
+    # Store raw content
+    raw_content = ''.join(lines)
+
     # Extract metrics
     metrics = {
         'report_file': latest_report.name,
         'last_updated': datetime.fromtimestamp(latest_report.stat().st_mtime).isoformat(),
+        'raw_content': raw_content,
         'datasets': {},
         'overall': {}
     }
@@ -58,40 +62,51 @@ def get_latest_performance_report() -> Optional[dict]:
     in_table = False
     for line in lines:
         line = line.strip()
-        if line.startswith('Dataset'):
+        if 'Dataset' in line and 'Total' in line:
+            # Found the header line
             in_table = True
             continue
         if in_table and line.startswith('-'):
+            # Skip separator lines
+            continue
+        if in_table and line.startswith('='):
+            # Skip double separator lines
             continue
         if in_table and line.startswith('Overall'):
             # Parse overall metrics
             parts = line.split()
-            if len(parts) >= 9:
-                metrics['overall'] = {
-                    'total': int(parts[1]),
-                    'TP': int(parts[2]),
-                    'FP': int(parts[3]),
-                    'TN': int(parts[4]),
-                    'FN': int(parts[5]),
-                    'accuracy': float(parts[6]),
-                    'precision': float(parts[7]),
-                    'recall': float(parts[8])
-                }
+            try:
+                if len(parts) >= 9:
+                    metrics['overall'] = {
+                        'total': int(parts[1]),
+                        'TP': int(parts[2]),
+                        'FP': int(parts[3]),
+                        'TN': int(parts[4]),
+                        'FN': int(parts[5]),
+                        'accuracy': float(parts[6]),
+                        'precision': float(parts[7]),
+                        'recall': float(parts[8])
+                    }
+            except (ValueError, IndexError) as e:
+                print(f"Warning: Failed to parse overall metrics: {e}")
             break
         if in_table and line:
             # Parse dataset metrics
             parts = line.split()
-            if len(parts) >= 9 and parts[0] in ['0E', '1E', '2E', '3E', '4E']:
-                metrics['datasets'][parts[0]] = {
-                    'total': int(parts[1]),
-                    'TP': int(parts[2]),
-                    'FP': int(parts[3]),
-                    'TN': int(parts[4]),
-                    'FN': int(parts[5]),
-                    'accuracy': float(parts[6]),
-                    'precision': float(parts[7]),
-                    'recall': float(parts[8])
-                }
+            try:
+                if len(parts) >= 9 and parts[0] in ['0E', '1E', '2E', '3E', '4E']:
+                    metrics['datasets'][parts[0]] = {
+                        'total': int(parts[1]),
+                        'TP': int(parts[2]),
+                        'FP': int(parts[3]),
+                        'TN': int(parts[4]),
+                        'FN': int(parts[5]),
+                        'accuracy': float(parts[6]),
+                        'precision': float(parts[7]),
+                        'recall': float(parts[8])
+                    }
+            except (ValueError, IndexError) as e:
+                print(f"Warning: Failed to parse dataset line '{line}': {e}")
 
     return metrics
 
@@ -135,31 +150,31 @@ def get_performance_metrics() -> dict:
 
 
 @mcp.tool()
-def get_recent_detections(limit: int = 10) -> dict:
+def get_recent_detections(limit: int = 10) -> str:
     """
     Get the most recent unbalance detection events.
 
     Args:
         limit: Maximum number of detections to return (default: 10)
 
-    Returns a dictionary containing:
+    Returns JSON string containing:
     - List of recent detection events with timestamps, dataset info, and prediction scores
     - Count of total detections available
     """
     detections = get_latest_detections(limit)
 
     if not detections:
-        return {
+        return json.dumps({
             "status": "no_data",
             "message": "No detection events found. The system may not have detected any unbalance yet.",
             "detections": []
-        }
+        })
 
-    return {
+    return json.dumps({
         "status": "success",
         "count": len(detections),
         "detections": detections
-    }
+    })
 
 
 @mcp.tool()
@@ -194,7 +209,9 @@ def get_system_status() -> dict:
         "overall_accuracy": metrics['overall'].get('accuracy', 0.0) if metrics.get('overall') else 0.0,
         "total_windows_processed": metrics['overall'].get('total', 0) if metrics.get('overall') else 0,
         "recent_detections_count": len(recent_detections),
-        "report_file": metrics['report_file']
+        "report_file": metrics['report_file'],
+        "raw_content": metrics.get('raw_content', ''),
+        "parsing_success": bool(metrics.get('overall'))
     }
 
 
