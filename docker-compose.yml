@@ -139,8 +139,10 @@ services:
       --mcp-port 8000
       --model-path /app/models/fft_fcn_4_layers.h5
       --output-dir /app/outputs/fft
+      --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
     volumes:
       - ./outputs:/app/outputs
+      - ../data:/app/data:ro
     working_dir: /app
     networks:
       - unbalance-net

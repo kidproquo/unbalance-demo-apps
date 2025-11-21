@@ -614,9 +614,9 @@ def process_from_redis(model, scaler, output_dir, redis_config,
 
             # Get window data from Redis message (if available) or from loaded data
             if 'sensor_data' in window_msg:
-                # Sensor data from Redis: columns are [Vibration_1, Vibration_2, Vibration_3]
-                # FFT uses Vibration_1 (column index 0)
-                window_data = window_msg['sensor_data'][:, 0]
+                # Sensor data from Redis: columns are [Measured_RPM, Vibration_1, Vibration_2, Vibration_3]
+                # FFT uses Vibration_1 (column index 1)
+                window_data = window_msg['sensor_data'][:, 1]
             elif data is not None and dataset_label in data:
                 # Fallback to loaded data
                 sensor_data = data[dataset_label][SENSOR].values
@@ -1011,18 +1011,30 @@ Examples:
         print("\nPlease ensure the reference model exists, or specify a different model with --model-path")
         return
 
-    # In Redis mode, skip data loading - data comes from coordinator via Redis
+    # In Redis mode, still need to load data to fit the scaler
     if args.redis_mode:
         print("=" * 80)
-        print("Redis Mode - Skipping Data Loading")
+        print("Redis Mode - Loading Data for Scaler Fitting")
         print("=" * 80)
         print("Data will be received from coordinator via Redis stream")
-        print("Using identity scaler (no scaling) for FFT preprocessing")
-        data = None
+        print("Loading 0E dataset to fit RobustScaler for FFT preprocessing...")
+
+        # Load just 0E for scaler fitting (faster than loading all)
+        data = load_data(args.data_url, datasets_to_load='0E')
+        data = skip_warmup(data)
+
+        # Fit scaler on a subset of 0E data
+        sensor_data = data['0E'][SENSOR].values
+        n_windows = min(5000, len(sensor_data) // WINDOW)
+        X_subset = sensor_data[:n_windows * WINDOW].reshape((n_windows, WINDOW))
+        X_subset_fft = np.abs(np.fft.rfft(X_subset, axis=1))[:, :FFT_FEATURES]
+        X_subset_fft[:, 0] = 0  # Zero out DC component
+
+        scaler = RobustScaler(quantile_range=(5, 95)).fit(X_subset_fft)
+        print(f"Scaler fitted on {n_windows} windows from 0E dataset")
+
         X_val_fft, y_val = np.array([]), np.array([])
-        # Create identity scaler (no actual scaling)
-        from sklearn.preprocessing import FunctionTransformer
-        scaler = FunctionTransformer()  # Identity transform
+        data = None  # Free memory, data will come from Redis
     else:
         # Load only the datasets we need (much faster!)
         data = load_data(args.data_url, datasets_to_load=args.dataset)

@@ -1018,9 +1018,9 @@ def process_from_redis(model, output_dir, redis_config, stream_name,
 
             # Get window data from Redis message (if available) or from loaded data
             if 'sensor_data' in window_msg:
-                # Sensor data from Redis: columns are [Vibration_1, Vibration_2, Vibration_3]
-                # CNN uses Vibration_1 (column index 0)
-                window_data = window_msg['sensor_data'][:, 0]
+                # Sensor data from Redis: columns are [Measured_RPM, Vibration_1, Vibration_2, Vibration_3]
+                # CNN uses Vibration_1 (column index 1)
+                window_data = window_msg['sensor_data'][:, 1]
             elif data is not None and dataset_label in data:
                 # Fallback to loaded data
                 window_data = data[dataset_label][SENSOR].iloc[start_idx:end_idx].values

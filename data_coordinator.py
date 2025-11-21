@@ -23,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from utils.redis_client import RedisConfig, WindowPublisher, test_redis_connection
 from utils.data_utils import load_data, skip_warmup
 
-# Sensor columns to extract: 3 vibration sensors (skip V_in at index 0)
-SENSOR_COLUMNS = ['Vibration_1', 'Vibration_2', 'Vibration_3']
+# Sensor columns to extract: RPM and 3 vibration sensors (skip V_in at index 0)
+SENSOR_COLUMNS = ['Measured_RPM', 'Vibration_1', 'Vibration_2', 'Vibration_3']
 
 
 # Constants
