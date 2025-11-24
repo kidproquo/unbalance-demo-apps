@@ -538,7 +538,7 @@ def process_with_weighted_sampling(model, data, scaler, output_dir, speed=0,
 
 def process_from_redis(model, scaler, output_dir, redis_config,
                       stream_name='windows', consumer_group='detectors',
-                      consumer_name='fft', log_interval=10, data=None):
+                      consumer_name='fft', log_interval=10, log_timing=False, data=None):
     """
     Process windows from Redis stream for synchronized detection with FFT preprocessing.
 
@@ -600,19 +600,24 @@ def process_from_redis(model, scaler, output_dir, redis_config,
     try:
         while True:
             # Read next window from Redis (blocking)
+            iteration_start = time.time()
             window_msg = consumer.read_window(block_ms=5000)
 
             if window_msg is None:
                 # Timeout - no new messages, continue waiting
                 continue
 
+            read_time = time.time() - iteration_start
+
             # Extract window information
             dataset_label = window_msg['dataset']
+            window_idx = window_msg['window_idx']
             start_idx = window_msg['start_idx']
             end_idx = window_msg['end_idx']
             redis_timestamp = window_msg['timestamp']
 
             # Get window data from Redis message (if available) or from loaded data
+            parse_start = time.time()
             if 'sensor_data' in window_msg:
                 # Sensor data from Redis: columns are [Measured_RPM, Vibration_1, Vibration_2, Vibration_3]
                 # FFT uses Vibration_1 (column index 1)
@@ -641,10 +646,13 @@ def process_from_redis(model, scaler, output_dir, redis_config,
 
             # Apply scaling
             window_data_fft_scaled = scaler.transform(window_data_fft)
+            parse_time = time.time() - parse_start
 
             # Predict
+            predict_start = time.time()
             predictions = model.predict(window_data_fft_scaled, verbose=0)
             predictions_binary = (predictions > UNBALANCE_THRESHOLD).astype(int).flatten()
+            predict_time = time.time() - predict_start
 
             # Check if unbalance detected (majority voting)
             unbalance_detections = np.sum(predictions_binary)
@@ -756,7 +764,16 @@ def process_from_redis(model, scaler, output_dir, redis_config,
                 performance_stats[dataset_label]['TN'] += 1
 
             # Acknowledge message
+            ack_start = time.time()
             consumer.acknowledge(window_msg['message_id'])
+            ack_time = time.time() - ack_start
+
+            total_iteration_time = time.time() - iteration_start
+
+            # Log timing if enabled
+            if log_timing:
+                print(f"[FFT] Window {window_idx}: read={read_time*1000:.1f}ms, parse={parse_time*1000:.1f}ms, "
+                      f"predict={predict_time*1000:.1f}ms, ack={ack_time*1000:.1f}ms, total={total_iteration_time*1000:.1f}ms")
 
             # Log running metrics every N windows
             if (window_idx + 1) % log_interval == 0:
@@ -934,6 +951,9 @@ Examples:
 
     parser.add_argument('--threshold', type=float, default=0.9,
                        help='Unbalance detection threshold (0.0-1.0). Default: 0.9')
+
+    parser.add_argument('--log-timing', action='store_true',
+                       help='Log processing time for each window. Default: False')
 
     # Redis synchronization arguments
     parser.add_argument('--redis-mode', action='store_true',
@@ -1118,6 +1138,7 @@ Examples:
             consumer_group=args.consumer_group,
             consumer_name=args.consumer_name,
             log_interval=args.log_interval,
+            log_timing=args.log_timing,
             data=data  # Optional fallback if sensor data not in Redis
         )
     else:

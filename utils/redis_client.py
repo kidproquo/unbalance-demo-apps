@@ -134,11 +134,13 @@ class WindowPublisher:
             message['sensor_shape'] = json.dumps(sensor_data.shape)
             message['sensor_dtype'] = str(sensor_data.dtype)
 
-        # Publish to Redis stream using XADD
+        # Publish to Redis stream using XADD with approximate maxlen
+        # This prevents memory buildup when consumers are slow
         message_id = self.client.xadd(
             self.stream_name,
             message,
-            maxlen=10000  # Keep last 10000 messages
+            maxlen=1000,  # Keep last ~1000 messages
+            approximate=True  # More efficient, allows Redis to trim in batches
         )
 
         return message_id

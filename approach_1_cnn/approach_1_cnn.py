@@ -935,7 +935,7 @@ def process_timeseries_data(model, data, output_dir='../../figures/detections',
 
 
 def process_from_redis(model, output_dir, redis_config, stream_name,
-                       consumer_group, consumer_name, log_interval=10, data=None):
+                       consumer_group, consumer_name, log_interval=10, log_timing=False, data=None):
     """
     Process windows from Redis stream for synchronized detection across approaches.
 
@@ -1003,11 +1003,14 @@ def process_from_redis(model, output_dir, redis_config, stream_name,
     try:
         while True:
             # Read next window from Redis (blocks for up to 5 seconds)
+            iteration_start = time.time()
             window_msg = consumer.read_window(block_ms=5000)
 
             if window_msg is None:
                 # Timeout - no new messages
                 continue
+
+            read_time = time.time() - iteration_start
 
             # Extract window information
             dataset_label = window_msg['dataset']
@@ -1018,6 +1021,7 @@ def process_from_redis(model, output_dir, redis_config, stream_name,
             redis_timestamp = window_msg['timestamp']
 
             # Get window data from Redis message (if available) or from loaded data
+            parse_start = time.time()
             if 'sensor_data' in window_msg:
                 # Sensor data from Redis: columns are [Measured_RPM, Vibration_1, Vibration_2, Vibration_3]
                 # CNN uses Vibration_1 (column index 1)
@@ -1032,12 +1036,15 @@ def process_from_redis(model, output_dir, redis_config, stream_name,
 
             # Reshape for CNN: (samples, 1) - CNN expects 2D input
             window_data_reshaped = window_data.reshape(-1, 1)
+            parse_time = time.time() - parse_start
 
             # Predict
+            predict_start = time.time()
             prediction = model.predict(np.array([window_data_reshaped]), verbose=0)[0][0]
+            predict_time = time.time() - predict_start
 
             # Determine if unbalance detected
-            detected = prediction > 0.5
+            detected = prediction > UNBALANCE_THRESHOLD
 
             # Track metrics
             ground_truth_positive = dataset_label != '0E'  # True if 1E-4E
@@ -1053,6 +1060,18 @@ def process_from_redis(model, output_dir, redis_config, stream_name,
                 dataset_stats[dataset_label]['FN'] += 1
 
             dataset_stats[dataset_label]['total'] += 1
+
+            # Acknowledge message
+            ack_start = time.time()
+            consumer.acknowledge(message_id)
+            ack_time = time.time() - ack_start
+
+            total_iteration_time = time.time() - iteration_start
+
+            # Log timing if enabled
+            if log_timing:
+                print(f"[CNN] Window {window_idx}: read={read_time*1000:.1f}ms, parse={parse_time*1000:.1f}ms, "
+                      f"predict={predict_time*1000:.1f}ms, ack={ack_time*1000:.1f}ms, total={total_iteration_time*1000:.1f}ms")
 
             # Generate figure if unbalance detected
             if detected:
@@ -1258,6 +1277,9 @@ Examples:
     parser.add_argument('--threshold', type=float, default=0.9,
                        help='Unbalance detection threshold (0.0-1.0). Default: 0.9')
 
+    parser.add_argument('--log-timing', action='store_true',
+                       help='Log processing time for each window. Default: False')
+
     # Redis synchronization arguments
     parser.add_argument('--redis-mode', action='store_true',
                        help='Enable Redis consumer mode for synchronized processing')
@@ -1409,6 +1431,7 @@ Examples:
             consumer_group=args.consumer_group,
             consumer_name=args.consumer_name,
             log_interval=args.log_interval,
+            log_timing=args.log_timing,
             data=data  # Optional fallback if sensor data not in Redis
         )
     else:
