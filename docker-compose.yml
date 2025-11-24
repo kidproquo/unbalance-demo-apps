@@ -48,6 +48,7 @@ services:
       --publish-rate 1.0
       --redis-host redis
       --redis-stream windows
+      --unbalance-levels 1E
     volumes:
       - ../data:/app/data:ro
       - ./outputs:/app/outputs
@@ -96,7 +97,6 @@ services:
       --model-path /app/models/cnn_3_layers.h5
       --output-dir /app/outputs/cnn
       --threshold 0.9
-      --log-timing
     volumes:
       - ./outputs:/app/outputs
     working_dir: /app
@@ -147,7 +147,6 @@ services:
       --output-dir /app/outputs/fft
       --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
       --threshold 0.9
-      --log-timing
     volumes:
       - ./outputs:/app/outputs
       - ../data:/app/data:ro
@@ -198,7 +197,6 @@ services:
       --model-path /app/models/minimal_rfc.joblib
       --output-dir /app/outputs/rfc
       --threshold 0.9
-      --log-timing
     volumes:
       - ./outputs:/app/outputs
     working_dir: /app

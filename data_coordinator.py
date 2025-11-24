@@ -68,6 +68,15 @@ Examples:
   # Custom sampling weights
   python data_coordinator.py --normal-weight 0.8 --max-windows 500
 
+  # Only use Level 1 unbalance data
+  python data_coordinator.py --unbalance-levels 1E
+
+  # Use only Level 1 and Level 2 unbalance data
+  python data_coordinator.py --unbalance-levels 1E,2E
+
+  # Only use Level 4 (most severe) unbalance data
+  python data_coordinator.py --unbalance-levels 4E --normal-weight 0.5
+
   # Connect to remote Redis
   python data_coordinator.py --redis-host redis.example.com --redis-port 6379
         """)
@@ -78,6 +87,9 @@ Examples:
                        help='Time window duration in seconds (default: 10)')
     parser.add_argument('--normal-weight', type=float, default=0.9,
                        help='Probability of selecting normal (0E) data (default: 0.9)')
+    parser.add_argument('--unbalance-levels', type=str, default='1E,2E,3E,4E',
+                       help='Comma-separated list of unbalance levels to use (default: 1E,2E,3E,4E). '
+                            'Examples: "1E" for only level 1, "1E,2E" for levels 1 and 2, "4E" for only level 4')
     parser.add_argument('--publish-rate', type=float, default=0,
                        help='Publish rate in windows/second (0=maximum speed) (default: 0)')
 
@@ -94,6 +106,15 @@ Examples:
 
     args = parser.parse_args()
 
+    # Parse unbalance levels
+    unbalance_levels = [level.strip().upper() for level in args.unbalance_levels.split(',')]
+    # Validate unbalance levels
+    valid_levels = ['1E', '2E', '3E', '4E']
+    for level in unbalance_levels:
+        if level not in valid_levels:
+            print(f"Error: Invalid unbalance level '{level}'. Valid levels are: {', '.join(valid_levels)}")
+            return
+
     # Print header
     print("=" * 80)
     print("Data Coordinator for Synchronized Unbalance Detection")
@@ -103,7 +124,7 @@ Examples:
     print(f"  Time Window: {args.time_window} seconds")
     print(f"  Max Windows: {'Infinite (Ctrl+C to stop)' if args.max_windows is None else args.max_windows}")
     print(f"  Normal Weight (0E): {args.normal_weight*100:.0f}%")
-    print(f"  Unbalanced Weight (1E-4E): {(1-args.normal_weight)*100:.0f}%")
+    print(f"  Unbalanced Weight ({', '.join(unbalance_levels)}): {(1-args.normal_weight)*100:.0f}%")
     print(f"  Publish Rate: {'Maximum' if args.publish_rate == 0 else f'{args.publish_rate} windows/s'}")
     print(f"  Redis Stream: {args.redis_stream}")
     print()
@@ -113,7 +134,10 @@ Examples:
     print("Loading Dataset")
     print("=" * 80)
     print(f"Data source: {args.data_url}")
-    data = load_data(args.data_url, datasets_to_load='all')
+    # Load only 0E and the specified unbalance levels
+    datasets_to_load = ['0E'] + unbalance_levels
+    print(f"Loading datasets: {', '.join(datasets_to_load)}")
+    data = load_data(args.data_url, datasets_to_load=datasets_to_load)
     data = skip_warmup(data)
 
     # Get actual data lengths from loaded data
@@ -173,9 +197,14 @@ Examples:
                 # Select normal (0E)
                 selected_label = '0E'
             else:
-                # Select randomly from unbalanced datasets (1E-4E)
-                unbalanced_labels = [l for l in available_windows.keys() if l != '0E']
-                selected_label = np.random.choice(unbalanced_labels)
+                # Select randomly from specified unbalanced datasets
+                # Filter to only those that are available (were loaded and have windows)
+                available_unbalanced_labels = [l for l in unbalance_levels if l in available_windows]
+                if not available_unbalanced_labels:
+                    print("Warning: No unbalanced datasets available. Defaulting to 0E.")
+                    selected_label = '0E'
+                else:
+                    selected_label = np.random.choice(available_unbalanced_labels)
 
             dataset_selection_counts[selected_label] += 1
 
