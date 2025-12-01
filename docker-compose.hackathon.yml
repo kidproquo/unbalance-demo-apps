@@ -6,12 +6,12 @@ version: '3.8'
 # - Uses Level 1, 2, and 3 unbalances (subtle to moderate-severe)
 # - Higher detection thresholds to create selective detection
 # - 8% unbalanced data (realistic event rate)
-# - 1.5 windows/second (good pace without overwhelming)
+# - 1.0 windows/second (comfortable pace for analysis)
 #
 # Expected behavior:
 # - Models agree ~30-40% of the time (challenging consensus logic)
 # - Multiple alliance patterns (CNN+FFT, FFT+RFC, CNN+RFC)
-# - Consensus events every 30-45 seconds (engaging but not overwhelming)
+# - Consensus events every 16-20 seconds (engaging but not overwhelming)
 #
 # Usage:
 #   docker compose -f docker-compose.hackathon.yml up
@@ -59,7 +59,7 @@ services:
       --time-window 1
       --normal-weight 0.92
       --unbalance-levels 1E,2E,3E
-      --publish-rate 1.5
+      --publish-rate 1.0
       --redis-host redis
       --redis-stream windows
     volumes:
@@ -220,7 +220,7 @@ networks:
 # Data Distribution:
 #   - 92% Normal (0E)
 #   - 8% Unbalanced (~2.7% each: Level 1, 2, 3)
-#   - Publishing rate: 1.5 windows/second
+#   - Publishing rate: 1.0 windows/second
 #   - Using subtle-to-moderate-severe unbalances (1E, 2E, 3E)
 #
 # Detection Thresholds (creates disagreement):
@@ -235,7 +235,7 @@ networks:
 #   - ~30-40% 2-of-3 agreement
 #   - ~40-50% all-3 agreement
 #   - ~20-30% only-1 detection
-#   - Consensus events every 30-45 seconds
+#   - Consensus events every 16-20 seconds
 #
 # MCP Server Endpoints (for participants):
 #   - CNN: http://localhost:12001
