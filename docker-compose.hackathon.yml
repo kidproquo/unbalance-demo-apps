@@ -3,15 +3,15 @@ version: '3.8'
 # Docker Compose configuration for Hackathon Challenge
 #
 # This configuration creates interesting disagreement between models:
-# - Uses Level 1 and Level 2 unbalances (subtle to moderate)
-# - Different detection thresholds per model
-# - 15% unbalanced data (more events to analyze)
+# - Uses Level 1, 2, and 3 unbalances (subtle to moderate-severe)
+# - Higher detection thresholds to create selective detection
+# - 8% unbalanced data (realistic event rate)
 # - 1.5 windows/second (good pace without overwhelming)
 #
 # Expected behavior:
-# - Models agree ~50-60% of the time (interesting for consensus logic)
+# - Models agree ~30-40% of the time (challenging consensus logic)
 # - Multiple alliance patterns (CNN+FFT, FFT+RFC, CNN+RFC)
-# - Enough events to be engaging without data overload
+# - Consensus events every 30-45 seconds (engaging but not overwhelming)
 #
 # Usage:
 #   docker compose -f docker-compose.hackathon.yml up
@@ -57,8 +57,8 @@ services:
     command: >
       python -u data_coordinator.py
       --time-window 1
-      --normal-weight 0.85
-      --unbalance-levels 1E,2E
+      --normal-weight 0.92
+      --unbalance-levels 1E,2E,3E
       --publish-rate 1.5
       --redis-host redis
       --redis-stream windows
@@ -107,7 +107,7 @@ services:
       --mcp-port 8000
       --model-path /app/models/cnn_3_layers.h5
       --output-dir /app/outputs/cnn
-      --threshold 0.75
+      --threshold 0.88
     volumes:
       - ./outputs:/app/outputs
     working_dir: /app
@@ -155,7 +155,7 @@ services:
       --model-path /app/models/fft_fcn_4_layers.h5
       --output-dir /app/outputs/fft
       --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
-      --threshold 0.90
+      --threshold 0.94
     volumes:
       - ./outputs:/app/outputs
       - ../data:/app/data:ro
@@ -203,7 +203,7 @@ services:
       --mcp-port 8000
       --model-path /app/models/minimal_rfc.joblib
       --output-dir /app/outputs/rfc
-      --threshold 0.85
+      --threshold 0.90
     volumes:
       - ./outputs:/app/outputs
     working_dir: /app
@@ -218,22 +218,24 @@ networks:
 # ================================
 #
 # Data Distribution:
-#   - 85% Normal (0E)
-#   - 15% Unbalanced (7.5% Level 1, 7.5% Level 2)
+#   - 92% Normal (0E)
+#   - 8% Unbalanced (~2.7% each: Level 1, 2, 3)
 #   - Publishing rate: 1.5 windows/second
-#   - Only using subtle-to-moderate unbalances (1E, 2E)
+#   - Using subtle-to-moderate-severe unbalances (1E, 2E, 3E)
 #
 # Detection Thresholds (creates disagreement):
-#   - CNN: 0.75 (more sensitive - detects more cases)
-#   - FFT: 0.90 (balanced - standard threshold)
-#   - RFC: 0.85 (between CNN and FFT)
+#   - CNN: 0.88 (most balanced)
+#   - FFT: 0.94 (most conservative - highest threshold)
+#   - RFC: 0.90 (middle ground)
 #
 # Expected Disagreement Patterns:
-#   - Level 1: CNN/FFT agree, RFC often disagrees
-#   - Level 2: FFT best, CNN/RFC mixed
-#   - ~50-60% 2-of-3 agreement
-#   - ~20-30% all-3 agreement
-#   - ~10-20% only-1 detection
+#   - Level 1: Often only CNN detects (subtle)
+#   - Level 2: CNN+RFC agree, FFT misses ~50% of time
+#   - Level 3: All 3 agree most of the time (more severe)
+#   - ~30-40% 2-of-3 agreement
+#   - ~40-50% all-3 agreement
+#   - ~20-30% only-1 detection
+#   - Consensus events every 30-45 seconds
 #
 # MCP Server Endpoints (for participants):
 #   - CNN: http://localhost:12001
