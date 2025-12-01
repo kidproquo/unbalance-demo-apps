@@ -64,7 +64,7 @@ services:
       --redis-stream windows
     volumes:
       - ../data:/app/data:ro
-      - ./hackathon-outputs:/app/outputs
+      - ./outputs:/app/outputs
     working_dir: /app
     networks:
       - hackathon-net
@@ -109,7 +109,7 @@ services:
       --output-dir /app/outputs/cnn
       --threshold 0.75
     volumes:
-      - ./hackathon-outputs:/app/outputs
+      - ./outputs:/app/outputs
     working_dir: /app
     networks:
       - hackathon-net
@@ -157,7 +157,7 @@ services:
       --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
       --threshold 0.90
     volumes:
-      - ./hackathon-outputs:/app/outputs
+      - ./outputs:/app/outputs
       - ../data:/app/data:ro
     working_dir: /app
     networks:
@@ -205,7 +205,7 @@ services:
       --output-dir /app/outputs/rfc
       --threshold 0.85
     volumes:
-      - ./hackathon-outputs:/app/outputs
+      - ./outputs:/app/outputs
     working_dir: /app
     networks:
       - hackathon-net
@@ -246,9 +246,9 @@ networks:
 #   - {approach}_get_performance_metrics() [hidden during challenge]
 #
 # Outputs:
-#   - Detection logs: ./hackathon-outputs/{cnn,fft,rfc}/detections.jsonl
-#   - Performance reports: ./hackathon-outputs/{cnn,fft,rfc}/performance_report_*.txt
-#   - Figures: ./hackathon-outputs/{cnn,fft,rfc}/*.png
+#   - Detection logs: ./outputs/{cnn,fft,rfc}/detections.jsonl
+#   - Performance reports: ./outputs/{cnn,fft,rfc}/performance_report_*.txt
+#   - Figures: ./outputs/{cnn,fft,rfc}/*.png
 #
 # Important Notes:
 #   - Detection logs do NOT contain ground truth (dataset labels)

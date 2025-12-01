@@ -1,0 +1,302 @@
+{
+  "name": "Hackathon - Unbalance Consensus Detector",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -384,
+        -80
+      ],
+      "id": "911da6fd-1413-460f-8042-32f8ae578766",
+      "name": "When chat message received",
+      "webhookId": "a7d94dfa-dd0d-485e-b267-b1a52c52b3af"
+    },
+    {
+      "parameters": {
+        "options": {},
+        "systemMessage": "=# Multi-Model Consensus Alert System\n\nYou are an expert agent analyzing unbalance detections from three ML models:\n\n## Your Task\nAnalyze recent detections from CNN, FFT, and RFC models to determine if there's consensus on an unbalance event.\n\n## Available Tools\n- `cnn_get_recent_detections`: Fetch latest detections from CNN model\n- `fft_get_recent_detections`: Fetch latest detections from FFT model  \n- `rfc_get_recent_detections`: Fetch latest detections from RFC model\n\n## Analysis Process\n\n1. **Fetch detections** from all 3 models (use limit=10 for recent detections)\n\n2. **Check conversation history** - IMPORTANT for deduplication:\n   - Review your previous messages to see what events you've already reported\n   - Track reported events by their timestamp or window_idx\n   - If you already reported consensus for a specific event, DO NOT report it again\n   - Only report NEW consensus events that haven't been mentioned before\n\n3. **Temporal correlation** - Group detections by time window:\n   - Detections within 5 seconds of each other likely refer to the same event\n   - Use timestamp field to group related detections\n\n4. **Evaluate consensus** - For each time window, check:\n   - How many models detected something?\n   - What are their confidence scores?\n   - Is there 2-of-3 or 3-of-3 agreement?\n   - Have you already reported this specific event?\n\n5. **Decision criteria**:\n   - **ALERT** if:\n     - 2 or more models agree within 5 seconds AND\n     - Average confidence >= 0.85 AND\n     - You have NOT already reported this event\n   - **NO ALERT** if:\n     - Only 1 model detected OR\n     - Low confidence (<0.85) OR  \n     - Detections are too far apart (>10 seconds) OR\n     - You already reported this event previously\n\n6. **Generate report** in this exact JSON format:\n   ```json\n   {\n     \"consensus\": true/false,\n     \"models_agreeing\": [\"cnn\", \"fft\", \"rfc\"],\n     \"confidence\": 0.95,\n     \"timestamp\": \"2025-11-24 20:45:01\",\n     \"reason\": \"CNN and FFT both detected with high confidence (>0.9)\",\n     \"cnn\": \"figure_filename.png\",\n     \"fft\": \"figure_filename.png\",\n     \"rfc\": \"figure_filename.png\"\n   }\n   ```\n\n## Important Notes\n\n- **DEDUPLICATION IS CRITICAL**: You have conversation memory via Redis. Use it to track what you've already reported. When you report consensus, remember the timestamp/window_idx so you don't report it again.\n- **NO GROUND TRUTH**: You don't know if it's really an unbalance (0E/1E/2E). Make decisions based only on model agreement.\n- **Confidence matters**: A 0.91 detection is different from 0.99\n- **Timing matters**: Models may detect at slightly different times\n- **Figure files**: Extract the `figure_file` field from each detection for the PNG report\n- **Be conservative**: It's better to miss some detections than raise false alarms\n\n## Response Format\n\nALWAYS respond with:\n1. Brief analysis summary (2-3 sentences)\n2. JSON object with consensus decision and figure filenames\n3. Reasoning for your decision\n\n## Example Analysis\n\n**User:** \"Check for consensus\"\n\n**Your response:**\n\"I've analyzed the latest detections from all three models. CNN detected an event at 20:45:01 (confidence: 0.95), FFT detected at 20:45:02 (confidence: 0.97), and RFC detected at 20:45:01 (confidence: 0.88). All three models agree within 1 second with high confidence - this is a clear consensus.\n\n```json\n{\n  \"consensus\": true,\n  \"models_agreeing\": [\"cnn\", \"fft\", \"rfc\"],\n  \"confidence\": 0.93,\n  \"timestamp\": \"2025-11-24 20:45:01\",\n  \"reason\": \"All 3 models detected within 1 second, avg confidence 0.93\",\n  \"cnn\": \"unbalance_detection_20251124_204501_row503808.png\",\n  \"fft\": \"unbalance_detection_20251124_204502_row503808.png\",\n  \"rfc\": \"unbalance_detection_20251124_204501_row503808.png\"\n}\n```\n\n**Decision rationale:** Three-way agreement with all confidences >0.85 and timestamps within 1 second indicates a genuine unbalance event. This meets our criteria for raising an alert.\"\n\n## Edge Cases\n\n- **Only CNN detects**: Likely false positive (CNN has lowest threshold). NO ALERT.\n- **Only RFC detects**: Could be real but need confirmation. NO ALERT.\n- **CNN + FFT agree, RFC silent**: ALERT (these are most reliable pair).\n- **All 3 but low confidence**: Borderline case. NO ALERT if avg <0.85.\n- **No recent detections**: Report \"No consensus - no recent detections from any model.\"\n- **Already reported**: If user asks again and the same detections appear, respond: \"I already reported consensus for the event at [timestamp]. No NEW consensus events detected since then.\"\n\n## Deduplication Example\n\n**First check:**\n\"Consensus detected at 20:45:01 with CNN+FFT agreement.\"\n\n**Second check (2 minutes later):**\n\"I previously reported consensus at 20:45:01. Checking for NEW events... No new consensus detected. The latest detections are the same ones I already reported.\"\n\nFocus on finding genuine consensus while minimizing false alarms and avoiding duplicate reports!"
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -176,
+        -80
+      ],
+      "id": "b0bed8fe-1377-4637-9753-262807eaeed6",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
+      "typeVersion": 1.5,
+      "position": [
+        -176,
+        128
+      ],
+      "id": "f7b28002-7551-4bd5-a175-82cb19677cf2",
+      "name": "Redis Chat Memory",
+      "credentials": {
+        "redis": {
+          "id": "kvhMqHze4z1ZBVon",
+          "name": "Local redis docker"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "endpointUrl": "http://n8n.princesamuel.me:12003/mcp",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.2,
+      "position": [
+        -16,
+        192
+      ],
+      "id": "5fc054af-eca1-436d-bf12-b5c795152291",
+      "name": "Random Forest Tool"
+    },
+    {
+      "parameters": {
+        "endpointUrl": "http://n8n.princesamuel.me:12001/mcp",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        144
+      ],
+      "id": "e81cbbd2-3c67-40a0-903e-c48930cd4c9d",
+      "name": "CNN Tool"
+    },
+    {
+      "parameters": {
+        "endpointUrl": "http://n8n.princesamuel.me:12002/mcp",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        176
+      ],
+      "id": "ce3db7cd-9ae2-4758-8b27-bfe517e88b71",
+      "name": "FFT Tool"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -384,
+        112
+      ],
+      "id": "2eeaa74d-3f22-45fc-a7b1-d85d2ff5609f",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "AMXRxS7E9OxhDu7E",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ \"/unbalance-outputs/cnn/\" + $json.output.parseJson().cnn }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        464,
+        -128
+      ],
+      "id": "3d9683b6-fad6-4b37-bb02-b7c693b761e9",
+      "name": "Read CNN Figure"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ \"/unbalance-outputs/fft/\" + $json.output.parseJson().fft}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        544,
+        64
+      ],
+      "id": "32bbd1f9-1907-4a57-b87e-4997853a4c27",
+      "name": "Read FFT Figure"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ \"/unbalance-outputs/rfc/\" + $json.output.parseJson().rfc }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        608,
+        256
+      ],
+      "id": "5273a5a5-96d9-464e-96aa-f6084abe5b2d",
+      "name": "Read RFC Figure"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "consensus-check",
+              "leftValue": "={{ $json.output.parseJson().consensus }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.1,
+      "position": [
+        128,
+        -80
+      ],
+      "id": "if-consensus-node",
+      "name": "Check Consensus"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Random Forest Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CNN Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FFT Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Check Consensus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Consensus": {
+      "main": [
+        [
+          {
+            "node": "Read CNN Figure",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read FFT Figure",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read RFC Figure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "e86072fa-16fc-451a-abc4-f2dfcac04f99",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9c703e7924b4010d3355a6f8f68afa283aaed8f143008f5156bfae52e793939e"
+  },
+  "id": "hackathon-consensus-workflow",
+  "tags": ["hackathon", "unbalance-detection", "consensus"]
+}
