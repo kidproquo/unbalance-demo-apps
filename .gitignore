@@ -74,7 +74,7 @@ tensorboard/
 *.svg
 detections/
 figures/
-outputs/
+*outputs/
 results/
 
 # Data files (uncomment if you want to ignore data)
@@ -134,3 +134,5 @@ dmypy.json
 
 # Docker
 docker-compose.override.yml
+
+

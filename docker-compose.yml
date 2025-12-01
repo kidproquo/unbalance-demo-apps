@@ -48,7 +48,7 @@ services:
       --publish-rate 1.0
       --redis-host redis
       --redis-stream windows
-      --unbalance-levels 1E
+    # --unbalance-levels 1E
     volumes:
       - ../data:/app/data:ro
       - ./outputs:/app/outputs

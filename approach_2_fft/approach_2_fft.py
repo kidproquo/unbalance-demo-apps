@@ -330,18 +330,21 @@ def process_with_weighted_sampling(model, data, scaler, output_dir, speed=0,
                 print(f"      Figure saved: {output_path}")
 
                 # Log detection event to JSONL file for MCP server
+                # NOTE: Ground truth (dataset label) is NOT included - production mode
                 detections_log = os.path.join(output_dir, "detections.jsonl")
                 detection_event = {
                     'timestamp': current_time.strftime('%Y-%m-%d %H:%M:%S'),
                     'window_idx': window_idx,
-                    'dataset': selected_label,
-                    'dataset_name': selected_name,
+                    # 'dataset': selected_label,  # REMOVED - no ground truth in production
+                    # 'dataset_name': selected_name,  # REMOVED - no ground truth in production
                     'start_idx': start_idx,
                     'end_idx': end_idx,
                     'detection_ratio': detection_ratio if isinstance(detection_ratio, (int, float)) else detection_ratio.item(),
                     'mean_prediction': np.mean(predictions).item(),
                     'max_prediction': np.max(predictions).item(),
-                    'figure_file': filename
+                    'confidence': np.max(predictions).item(),  # Add explicit confidence field
+                    'figure_file': filename,
+                    'approach': 'fft'
                 }
                 with open(detections_log, 'a') as f:
                     f.write(json.dumps(detection_event) + '\n')
@@ -734,18 +737,21 @@ def process_from_redis(model, scaler, output_dir, redis_config,
                 print(f"      Figure saved: {output_path}")
 
                 # Log detection event to JSONL file
+                # NOTE: Ground truth (dataset label) is NOT included - production mode
                 detections_log = os.path.join(output_dir, "detections.jsonl")
                 detection_event = {
                     'timestamp': current_time.strftime('%Y-%m-%d %H:%M:%S'),
                     'window_idx': window_idx,
-                    'dataset': dataset_label,
-                    'dataset_name': selected_name,
+                    # 'dataset': dataset_label,  # REMOVED - no ground truth in production
+                    # 'dataset_name': selected_name,  # REMOVED - no ground truth in production
                     'start_idx': start_idx,
                     'end_idx': end_idx,
                     'detection_ratio': detection_ratio if isinstance(detection_ratio, (int, float)) else detection_ratio.item(),
                     'mean_prediction': np.mean(predictions).item(),
                     'max_prediction': np.max(predictions).item(),
-                    'figure_file': filename
+                    'confidence': np.max(predictions).item(),  # Add explicit confidence field
+                    'figure_file': filename,
+                    'approach': 'fft'
                 }
                 with open(detections_log, 'a') as f:
                     f.write(json.dumps(detection_event) + '\n')
