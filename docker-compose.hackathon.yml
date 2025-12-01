@@ -107,7 +107,7 @@ services:
       --mcp-port 8000
       --model-path /app/models/cnn_3_layers.h5
       --output-dir /app/outputs/cnn
-      --threshold 0.88
+      --threshold 0.90
     volumes:
       - ./outputs:/app/outputs
     working_dir: /app
@@ -155,7 +155,7 @@ services:
       --model-path /app/models/fft_fcn_4_layers.h5
       --output-dir /app/outputs/fft
       --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
-      --threshold 0.94
+      --threshold 0.95
     volumes:
       - ./outputs:/app/outputs
       - ../data:/app/data:ro
@@ -203,7 +203,7 @@ services:
       --mcp-port 8000
       --model-path /app/models/minimal_rfc.joblib
       --output-dir /app/outputs/rfc
-      --threshold 0.90
+      --threshold 0.92
     volumes:
       - ./outputs:/app/outputs
     working_dir: /app
@@ -224,9 +224,9 @@ networks:
 #   - Using subtle-to-moderate-severe unbalances (1E, 2E, 3E)
 #
 # Detection Thresholds (creates disagreement):
-#   - CNN: 0.88 (most balanced)
-#   - FFT: 0.94 (most conservative - highest threshold)
-#   - RFC: 0.90 (middle ground)
+#   - CNN: 0.90 (most balanced)
+#   - FFT: 0.95 (most conservative - highest threshold)
+#   - RFC: 0.92 (middle ground)
 #
 # Expected Disagreement Patterns:
 #   - Level 1: Often only CNN detects (subtle)
