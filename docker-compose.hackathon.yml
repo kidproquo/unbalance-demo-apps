@@ -1,0 +1,267 @@
+version: '3.8'
+
+# Docker Compose configuration for Hackathon Challenge
+#
+# This configuration creates interesting disagreement between models:
+# - Uses Level 1 and Level 2 unbalances (subtle to moderate)
+# - Different detection thresholds per model
+# - 15% unbalanced data (more events to analyze)
+# - 1.5 windows/second (good pace without overwhelming)
+#
+# Expected behavior:
+# - Models agree ~50-60% of the time (interesting for consensus logic)
+# - Multiple alliance patterns (CNN+FFT, FFT+RFC, CNN+RFC)
+# - Enough events to be engaging without data overload
+#
+# Usage:
+#   docker compose -f docker-compose.hackathon.yml up
+
+services:
+  # Redis service for coordinating window processing
+  redis:
+    image: redis:7-alpine
+    container_name: hackathon-redis
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    networks:
+      - hackathon-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Data coordinator - publishes windows with Level 1 and Level 2 unbalances
+  coordinator:
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    container_name: hackathon-coordinator
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    depends_on:
+      redis:
+        condition: service_healthy
+      approach-cnn:
+        condition: service_healthy
+      approach-fft:
+        condition: service_healthy
+      approach-rfc:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    command: >
+      python -u data_coordinator.py
+      --time-window 1
+      --normal-weight 0.85
+      --unbalance-levels 1E,2E
+      --publish-rate 1.5
+      --redis-host redis
+      --redis-stream windows
+    volumes:
+      - ../data:/app/data:ro
+      - ./hackathon-outputs:/app/outputs
+    working_dir: /app
+    networks:
+      - hackathon-net
+
+  # Approach 1: CNN - Lower threshold (more sensitive)
+  approach-cnn:
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    container_name: hackathon-cnn
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "12001:8000"
+    command: >
+      python -u approach_1_cnn/approach_1_cnn.py
+      --redis-mode
+      --redis-host redis
+      --redis-stream windows
+      --consumer-group cnn-group
+      --consumer-name cnn
+      --log-interval 10
+      --dataset all
+      --time-window 1
+      --speed 1.0
+      --enable-mcp
+      --mcp-port 8000
+      --model-path /app/models/cnn_3_layers.h5
+      --output-dir /app/outputs/cnn
+      --threshold 0.75
+    volumes:
+      - ./hackathon-outputs:/app/outputs
+    working_dir: /app
+    networks:
+      - hackathon-net
+
+  # Approach 2: FFT - Medium threshold (balanced)
+  approach-fft:
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    container_name: hackathon-fft
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+    depends_on:
+      redis:
+        condition: service_healthy
+      approach-cnn:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 120s
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "12002:8000"
+    command: >
+      python -u approach_2_fft/approach_2_fft.py
+      --redis-mode
+      --redis-host redis
+      --redis-stream windows
+      --consumer-group fft-group
+      --consumer-name fft
+      --log-interval 10
+      --dataset all
+      --time-window 1
+      --speed 1.0
+      --enable-mcp
+      --mcp-port 8000
+      --model-path /app/models/fft_fcn_4_layers.h5
+      --output-dir /app/outputs/fft
+      --data-url /app/data/fraunhofer_eas_dataset_for_unbalance_detection_v1.zip
+      --threshold 0.90
+    volumes:
+      - ./hackathon-outputs:/app/outputs
+      - ../data:/app/data:ro
+    working_dir: /app
+    networks:
+      - hackathon-net
+
+  # Approach 3: RFC - Higher threshold (conservative)
+  approach-rfc:
+    image: ghcr.io/kidproquo/unbalanced-demo-apps:latest
+    container_name: hackathon-rfc
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    depends_on:
+      redis:
+        condition: service_healthy
+      approach-fft:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "12003:8000"
+    command: >
+      python -u approach_3_minimal_rfc/approach_3_minimal_rfc.py
+      --redis-mode
+      --redis-host redis
+      --redis-stream windows
+      --consumer-group rfc-group
+      --consumer-name rfc
+      --log-interval 10
+      --dataset all
+      --time-window 1
+      --speed 1.0
+      --enable-mcp
+      --mcp-port 8000
+      --model-path /app/models/minimal_rfc.joblib
+      --output-dir /app/outputs/rfc
+      --threshold 0.85
+    volumes:
+      - ./hackathon-outputs:/app/outputs
+    working_dir: /app
+    networks:
+      - hackathon-net
+
+networks:
+  hackathon-net:
+    driver: bridge
+
+# Hackathon Configuration Summary:
+# ================================
+#
+# Data Distribution:
+#   - 85% Normal (0E)
+#   - 15% Unbalanced (7.5% Level 1, 7.5% Level 2)
+#   - Publishing rate: 1.5 windows/second
+#   - Only using subtle-to-moderate unbalances (1E, 2E)
+#
+# Detection Thresholds (creates disagreement):
+#   - CNN: 0.75 (more sensitive - detects more cases)
+#   - FFT: 0.90 (balanced - standard threshold)
+#   - RFC: 0.85 (between CNN and FFT)
+#
+# Expected Disagreement Patterns:
+#   - Level 1: CNN/FFT agree, RFC often disagrees
+#   - Level 2: FFT best, CNN/RFC mixed
+#   - ~50-60% 2-of-3 agreement
+#   - ~20-30% all-3 agreement
+#   - ~10-20% only-1 detection
+#
+# MCP Server Endpoints (for participants):
+#   - CNN: http://localhost:12001
+#   - FFT: http://localhost:12002
+#   - RFC: http://localhost:12003
+#
+# Available MCP Tools:
+#   - {approach}_get_recent_detections(limit=100)
+#   - {approach}_get_system_status()
+#   - {approach}_get_performance_metrics() [hidden during challenge]
+#
+# Outputs:
+#   - Detection logs: ./hackathon-outputs/{cnn,fft,rfc}/detections.jsonl
+#   - Performance reports: ./hackathon-outputs/{cnn,fft,rfc}/performance_report_*.txt
+#   - Figures: ./hackathon-outputs/{cnn,fft,rfc}/*.png
+#
+# Important Notes:
+#   - Detection logs do NOT contain ground truth (dataset labels)
+#   - Participants must build consensus logic without knowing 0E/1E/2E
+#   - Performance reports are for organizers only (contain ground truth)
+#   - All outputs cleared on startup for fresh run
+#
+# To start:
+#   docker compose -f docker-compose.hackathon.yml up
+#
+# To stop:
+#   docker compose -f docker-compose.hackathon.yml down
+#
+# To view logs:
+#   docker compose -f docker-compose.hackathon.yml logs -f coordinator
+#   docker compose -f docker-compose.hackathon.yml logs -f approach-cnn
